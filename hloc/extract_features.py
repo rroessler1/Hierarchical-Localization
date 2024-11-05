@@ -232,6 +232,7 @@ def main(
         "Extracting local features with configuration:" f"\n{pprint.pformat(conf)}"
     )
 
+    # Looks like this is just a glob for all the images in image_dir
     dataset = ImageDataset(image_dir, conf["preprocessing"], image_list)
     if feature_path is None:
         feature_path = Path(export_dir, conf["output"] + ".h5")
@@ -239,6 +240,7 @@ def main(
     skip_names = set(
         list_h5_names(feature_path) if feature_path.exists() and not overwrite else ()
     )
+    # and then skip_names is the ones that have already been processed and are in this .h5 file
     dataset.names = [n for n in dataset.names if n not in skip_names]
     if len(dataset.names) == 0:
         logger.info("Skipping the extraction.")

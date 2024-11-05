@@ -116,12 +116,16 @@ class FeaturePairsDataset(torch.utils.data.Dataset):
         name0, name1 = self.pairs[idx]
         data = {}
         with h5py.File(self.feature_path_q, "r") as fd:
+            if name0 not in fd:
+                print(f"Error: could not find {name0}")
             grp = fd[name0]
             for k, v in grp.items():
                 data[k + "0"] = torch.from_numpy(v.__array__()).float()
             # some matchers might expect an image but only use its size
             data["image0"] = torch.empty((1,) + tuple(grp["image_size"])[::-1])
         with h5py.File(self.feature_path_r, "r") as fd:
+            if name1 not in fd:
+                print(f"Error: could not find {name1}")
             grp = fd[name1]
             for k, v in grp.items():
                 data[k + "1"] = torch.from_numpy(v.__array__()).float()

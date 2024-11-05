@@ -5,13 +5,18 @@ from pathlib import Path
 import cv2
 import h5py
 import numpy as np
+import os
 import pycolmap
 import torch
+from gluefactory.utils import image
+from gluefactory.utils.image import ImagePreprocessor
 from scipy.io import loadmat
+from scipy.spatial.transform import Rotation as R
 from tqdm import tqdm
 
 from . import logger
 from .utils.parsers import names_to_pair, parse_retrieval
+from .image_timestamp_mapping import create_image_timestamp_map, create_timestamp_trajectory_map, get_depths
 
 
 def interpolate_scan(scan, kp):
@@ -19,6 +24,7 @@ def interpolate_scan(scan, kp):
     kp = kp / np.array([[w - 1, h - 1]]) * 2 - 1
     assert np.all(kp > -1) and np.all(kp < 1)
     scan = torch.from_numpy(scan).permute(2, 0, 1)[None]
+    scan = scan.double()
     kp = torch.from_numpy(kp)[None, None]
     grid_sample = torch.nn.functional.grid_sample
 
@@ -63,6 +69,40 @@ def get_scan_pose(dataset_dir, rpath):
 
     return P_after_GICP
 
+def depth_to_point_cloud(depth_image, fx, fy, cx, cy):
+    """
+    Convert a depth image to a 3D point cloud.
+
+    Parameters:
+    - depth_image (numpy.ndarray): 2D depth map with depth values in meters.
+    - fx, fy: Focal lengths of the camera in pixels.
+    - cx, cy: Optical center (principal point) of the camera in pixels.
+
+    Returns:
+    - points (numpy.ndarray): Array of 3D points of shape (N, 3).
+    """
+    h, w = depth_image.shape
+    i, j = np.meshgrid(np.arange(w), np.arange(h), indexing='xy')
+
+    # Convert depth values to real-world 3D coordinates
+    Z = depth_image
+    X = (i - cx) * Z / fx
+    Y = (j - cy) * Z / fy
+
+    # Stack into HxWx3 array of 3D coordinates
+    points = np.stack((X, Y, Z), axis=-1) #.reshape(-1, 3)
+    return points
+
+    # # Filter out points with invalid depth
+    # valid_points = points[~np.isnan(Z.flatten()) & (Z.flatten() > 0)]
+    # return valid_points
+
+def load_and_rescale_depth_image(file_path):
+    depth_image = image.load_image(file_path, grayscale=True)
+    imsize = 480
+    depth_process = ImagePreprocessor({'resize':imsize , "side": "long", "square_pad": False})
+    new_depth_image = depth_process(depth_image)['image']
+    return new_depth_image[0, :, :].numpy()
 
 def pose_from_cluster(dataset_dir, q, retrieved, feature_file, match_file, skip=None):
     height, width = cv2.imread(str(dataset_dir / q)).shape[:2]
@@ -76,23 +116,49 @@ def pose_from_cluster(dataset_dir, q, retrieved, feature_file, match_file, skip=
     all_indices = []
     kpq = feature_file[q]["keypoints"].__array__()
     num_matches = 0
+    session_folder = "hl_2022-01-14-14-38-01-427"
+    depth_folder = "raw_data/depths"
+
+    # Reads the metadata files and ultimately creates a mapping from image name to the trajectory.
+    image_timestamp_map = create_image_timestamp_map(os.path.join(dataset_dir, session_folder, "images.txt"))
+    timestamp_trajectory_map = create_timestamp_trajectory_map(os.path.join(dataset_dir, session_folder, "trajectories.txt"))
+    depth_filenames = get_depths(os.path.join(dataset_dir, session_folder, "depths.txt"))
 
     for i, r in enumerate(retrieved):
+        file_name = os.path.join(os.path.basename(os.path.dirname(r)), os.path.basename(r))
+        depth_filename = depth_filenames[np.searchsorted(depth_filenames, os.path.basename(file_name))]
+        trajectory = timestamp_trajectory_map[image_timestamp_map[file_name]['timestamp']]
         kpr = feature_file[r]["keypoints"].__array__()
         pair = names_to_pair(q, r)
+        # m is an array of indices for which point from r matches to q
+        # or -1 if there is no match
         m = match_file[pair]["matches0"].__array__()
         v = m > -1
 
         if skip and (np.count_nonzero(v) < skip):
             continue
-
+        # so then, this gets all the valid match points from q, and the corresponding match from r
         mkpq, mkpr = kpq[v], kpr[m[v]]
         num_matches += len(mkpq)
 
-        scan_r = loadmat(Path(dataset_dir, r + ".mat"))["XYZcut"]
-        mkp3d, valid = interpolate_scan(scan_r, mkpr)
-        Tr = get_scan_pose(dataset_dir, r)
-        mkp3d = (Tr[:3, :3] @ mkp3d.T + Tr[:3, -1:]).T
+        # This rescales the depth images to be as wide as the Hololens greyscale images.
+        depth_map = load_and_rescale_depth_image(os.path.join(dataset_dir, session_folder, depth_folder, depth_filename))
+        # I was manually looking, and this seemed to be the offset of the depth image. Feels like there should be a better way?
+        # TODO: should be different if it's left or right
+        depth_map = np.pad(depth_map, pad_width=((140, 140), (20, 0)), mode='constant', constant_values=0)
+        # truncate to same size as image
+        depth_map = depth_map[:640, :480]
+        # The numbers seemed too small so I rescaled it.  I assume it's being normalized when loaded.  Should double check.
+        depth_map = depth_map*256
+        # just guessing on the focal length, ChatGPT recommended it
+        # TODO: this center is probably not correct, since I'm zero-padding the image.
+        point_cloud = depth_to_point_cloud(depth_map, 256, 256, 240, 320)
+        mkp3d, valid = interpolate_scan(point_cloud, mkpr)
+        # valid = [True] * mkpr.shape[0]
+        quat = [trajectory['qw'], trajectory['qx'], trajectory['qy'], trajectory['qz']]
+        translation = np.array([trajectory['tx'], trajectory['ty'], trajectory['tz']])
+        # Tr = get_scan_pose(dataset_dir, r)
+        mkp3d = (R.from_quat(quat).as_matrix() @ mkp3d.T + translation[:, np.newaxis]).T
 
         all_mkpq.append(mkpq[valid])
         all_mkpr.append(mkpr[valid])
@@ -136,29 +202,35 @@ def main(dataset_dir, retrieval, features, matches, results, skip_matches=None):
     logger.info("Starting localization...")
     for q in tqdm(queries):
         db = retrieval_dict[q]
-        ret, mkpq, mkpr, mkp3d, indices, num_matches = pose_from_cluster(
-            dataset_dir, q, db, feature_file, match_file, skip_matches
-        )
+        try:
+            ret, mkpq, mkpr, mkp3d, indices, num_matches = pose_from_cluster(
+                dataset_dir, q, db, feature_file, match_file, skip_matches
+            )
 
-        poses[q] = (ret["qvec"], ret["tvec"])
-        logs["loc"][q] = {
-            "db": db,
-            "PnP_ret": ret,
-            "keypoints_query": mkpq,
-            "keypoints_db": mkpr,
-            "3d_points": mkp3d,
-            "indices_db": indices,
-            "num_matches": num_matches,
-        }
+            poses[q] = (ret["qvec"], ret["tvec"])
+            logs["loc"][q] = {
+                "db": db,
+                "PnP_ret": ret,
+                "keypoints_query": mkpq,
+                "keypoints_db": mkpr,
+                "3d_points": mkp3d,
+                "indices_db": indices,
+                "num_matches": num_matches,
+            }
+        except ValueError:
+            pass
 
     logger.info(f"Writing poses to {results}...")
     with open(results, "w") as f:
         for q in queries:
-            qvec, tvec = poses[q]
-            qvec = " ".join(map(str, qvec))
-            tvec = " ".join(map(str, tvec))
-            name = q.split("/")[-1]
-            f.write(f"{name} {qvec} {tvec}\n")
+            if q in poses:
+                qvec, tvec = poses[q]
+                qvec = " ".join(map(str, qvec))
+                tvec = " ".join(map(str, tvec))
+                name = q.split("/")[-1]
+                f.write(f"{name} {qvec} {tvec}\n")
+            else:
+                print(f"Couldn't localize {q}")
 
     logs_path = f"{results}_logs.pkl"
     logger.info(f"Writing logs to {logs_path}...")

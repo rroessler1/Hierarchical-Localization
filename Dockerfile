@@ -1,5 +1,6 @@
 FROM colmap/colmap:latest
 MAINTAINER Paul-Edouard Sarlin
+RUN DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC apt-get -y install tzdata
 ARG PYTHON_VERSION=3.8
 RUN apt-get update -y
 RUN apt-get install -y unzip wget software-properties-common
