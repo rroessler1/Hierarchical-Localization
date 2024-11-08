@@ -169,6 +169,11 @@ def pose_from_cluster(dataset_dir, q, retrieved, feature_file, match_file, skip=
             print(repr(e))
             continue
 
+    all_mkpq = np.concatenate(all_mkpq, 0)
+    all_mkpr = np.concatenate(all_mkpr, 0)
+    all_mkp3d = np.concatenate(all_mkp3d, 0)
+    all_indices = np.concatenate(all_indices, 0)
+
     cfg = {
         "model": "SIMPLE_PINHOLE",
         "width": width,
