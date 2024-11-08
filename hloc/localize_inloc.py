@@ -127,48 +127,47 @@ def pose_from_cluster(dataset_dir, q, retrieved, feature_file, match_file, skip=
     for i, r in enumerate(retrieved):
         file_name = os.path.join(os.path.basename(os.path.dirname(r)), os.path.basename(r))
         depth_filename = depth_filenames[np.searchsorted(depth_filenames, os.path.basename(file_name))]
-        trajectory = timestamp_trajectory_map[image_timestamp_map[file_name]['timestamp']]
-        kpr = feature_file[r]["keypoints"].__array__()
-        pair = names_to_pair(q, r)
-        # m is an array of indices for which point from r matches to q
-        # or -1 if there is no match
-        m = match_file[pair]["matches0"].__array__()
-        v = m > -1
+        try:
+            trajectory = timestamp_trajectory_map[image_timestamp_map[file_name]['timestamp']]
+            kpr = feature_file[r]["keypoints"].__array__()
+            pair = names_to_pair(q, r)
+            # m is an array of indices for which point from r matches to q
+            # or -1 if there is no match
+            m = match_file[pair]["matches0"].__array__()
+            v = m > -1
 
-        if skip and (np.count_nonzero(v) < skip):
+            if skip and (np.count_nonzero(v) < skip):
+                continue
+            # so then, this gets all the valid match points from q, and the corresponding match from r
+            mkpq, mkpr = kpq[v], kpr[m[v]]
+            num_matches += len(mkpq)
+
+            # This rescales the depth images to be as wide as the Hololens greyscale images.
+            depth_map = load_and_rescale_depth_image(os.path.join(dataset_dir, session_folder, depth_folder, depth_filename))
+            # I was manually looking, and this seemed to be the offset of the depth image. Feels like there should be a better way?
+            # TODO: should be different if it's left or right
+            depth_map = np.pad(depth_map, pad_width=((140, 140), (20, 0)), mode='constant', constant_values=0)
+            # truncate to same size as image
+            depth_map = depth_map[:640, :480]
+            # The numbers seemed too small so I rescaled it.  I assume it's being normalized when loaded.  Should double check.
+            depth_map = depth_map*256
+            # just guessing on the focal length, ChatGPT recommended it
+            # TODO: this center is probably not correct, since I'm zero-padding the image.
+            point_cloud = depth_to_point_cloud(depth_map, 256, 256, 240, 320)
+            mkp3d, valid = interpolate_scan(point_cloud, mkpr)
+            # valid = [True] * mkpr.shape[0]
+            quat = [trajectory['qw'], trajectory['qx'], trajectory['qy'], trajectory['qz']]
+            translation = np.array([trajectory['tx'], trajectory['ty'], trajectory['tz']])
+            # Tr = get_scan_pose(dataset_dir, r)
+            mkp3d = (R.from_quat(quat).as_matrix() @ mkp3d.T + translation[:, np.newaxis]).T
+
+            all_mkpq.append(mkpq[valid])
+            all_mkpr.append(mkpr[valid])
+            all_mkp3d.append(mkp3d[valid])
+            all_indices.append(np.full(np.count_nonzero(valid), i))
+        except Exception as e:
+            print(repr(e))
             continue
-        # so then, this gets all the valid match points from q, and the corresponding match from r
-        mkpq, mkpr = kpq[v], kpr[m[v]]
-        num_matches += len(mkpq)
-
-        # This rescales the depth images to be as wide as the Hololens greyscale images.
-        depth_map = load_and_rescale_depth_image(os.path.join(dataset_dir, session_folder, depth_folder, depth_filename))
-        # I was manually looking, and this seemed to be the offset of the depth image. Feels like there should be a better way?
-        # TODO: should be different if it's left or right
-        depth_map = np.pad(depth_map, pad_width=((140, 140), (20, 0)), mode='constant', constant_values=0)
-        # truncate to same size as image
-        depth_map = depth_map[:640, :480]
-        # The numbers seemed too small so I rescaled it.  I assume it's being normalized when loaded.  Should double check.
-        depth_map = depth_map*256
-        # just guessing on the focal length, ChatGPT recommended it
-        # TODO: this center is probably not correct, since I'm zero-padding the image.
-        point_cloud = depth_to_point_cloud(depth_map, 256, 256, 240, 320)
-        mkp3d, valid = interpolate_scan(point_cloud, mkpr)
-        # valid = [True] * mkpr.shape[0]
-        quat = [trajectory['qw'], trajectory['qx'], trajectory['qy'], trajectory['qz']]
-        translation = np.array([trajectory['tx'], trajectory['ty'], trajectory['tz']])
-        # Tr = get_scan_pose(dataset_dir, r)
-        mkp3d = (R.from_quat(quat).as_matrix() @ mkp3d.T + translation[:, np.newaxis]).T
-
-        all_mkpq.append(mkpq[valid])
-        all_mkpr.append(mkpr[valid])
-        all_mkp3d.append(mkp3d[valid])
-        all_indices.append(np.full(np.count_nonzero(valid), i))
-
-    all_mkpq = np.concatenate(all_mkpq, 0)
-    all_mkpr = np.concatenate(all_mkpr, 0)
-    all_mkp3d = np.concatenate(all_mkp3d, 0)
-    all_indices = np.concatenate(all_indices, 0)
 
     cfg = {
         "model": "SIMPLE_PINHOLE",
@@ -187,7 +186,7 @@ def main(dataset_dir, retrieval, features, matches, results, skip_matches=None):
     assert matches.exists(), matches
 
     retrieval_dict = parse_retrieval(retrieval)
-    queries = list(retrieval_dict.keys())
+    queries = list(retrieval_dict.keys())[:2000]
 
     feature_file = h5py.File(features, "r", libver="latest")
     match_file = h5py.File(matches, "r", libver="latest")
@@ -200,8 +199,11 @@ def main(dataset_dir, retrieval, features, matches, results, skip_matches=None):
         "loc": {},
     }
     logger.info("Starting localization...")
+    i = 0
     for q in tqdm(queries):
         db = retrieval_dict[q]
+        if i > 2000:
+            break
         try:
             ret, mkpq, mkpr, mkp3d, indices, num_matches = pose_from_cluster(
                 dataset_dir, q, db, feature_file, match_file, skip_matches
@@ -217,8 +219,11 @@ def main(dataset_dir, retrieval, features, matches, results, skip_matches=None):
                 "indices_db": indices,
                 "num_matches": num_matches,
             }
+            i += 1
         except ValueError:
-            pass
+            continue
+        except KeyError:
+            continue
 
     logger.info(f"Writing poses to {results}...")
     with open(results, "w") as f:
