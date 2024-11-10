@@ -11,6 +11,7 @@ import torch
 from gluefactory.utils import image
 from gluefactory.utils.image import ImagePreprocessor
 from scipy.io import loadmat
+from scipy.ndimage import zoom
 from scipy.spatial.transform import Rotation as R
 from tqdm import tqdm
 
@@ -97,12 +98,52 @@ def depth_to_point_cloud(depth_image, fx, fy, cx, cy):
     # valid_points = points[~np.isnan(Z.flatten()) & (Z.flatten() > 0)]
     # return valid_points
 
+def depthmap_img_to_points_3d(depthmap_path, lut):
+    depthmap = np.array(
+      cv2.imread(str(depthmap_path), cv2.IMREAD_ANYDEPTH),
+      dtype=float
+    )
+    DEPTHMAP_SCALING_FACTOR = 1000  # mm to m
+    depthmap /= DEPTHMAP_SCALING_FACTOR
+    is_valid = np.logical_not(depthmap == -1)
+
+    ## Backproject to 3D.
+    num_valid_pixels = np.sum(is_valid)
+    valid_depths = depthmap[is_valid]
+    normalized_pixels = lut[is_valid]
+    normalized_pixels_hom = np.hstack([normalized_pixels, np.ones([num_valid_pixels, 1])])
+    points_3d = normalized_pixels_hom * (
+      valid_depths[:, np.newaxis] / np.linalg.norm(normalized_pixels_hom, axis=-1, keepdims=True)
+    )
+    points_3d = points_3d.reshape((*depthmap.shape, 3))
+
+    new_H, new_W = 432, 480
+    # Compute zoom factors for each dimension
+    zoom_factors = (new_H / points_3d.shape[0], new_W / points_3d.shape[1], 1)  # Keep 3rd dimension (2 channels) unchanged
+    # Apply zoom with bilinear interpolation
+    points_3d = zoom(points_3d, zoom_factors, order=1)  # order=1 for bilinear
+    return points_3d
+
 def load_and_rescale_depth_image(file_path):
     depth_image = image.load_image(file_path, grayscale=True)
     imsize = 480
     depth_process = ImagePreprocessor({'resize':imsize , "side": "long", "square_pad": False})
     new_depth_image = depth_process(depth_image)['image']
     return new_depth_image[0, :, :].numpy()
+
+def get_3d_points_matching_2d_points(mkp3d, mkpr):
+    h, w, c = mkp3d.shape
+    rows = mkpr[:, 0].astype(int)
+    cols = mkpr[:, 1].astype(int)
+
+    # Check bounds
+    valid_mask = (rows >= 0) & (rows < h) & (cols >= 0) & (cols < w)
+    rows[~valid_mask] = 0
+    cols[~valid_mask] = 0
+
+    # Select only valid points
+    selected_points = mkp3d[rows, cols]
+    return selected_points, valid_mask
 
 def pose_from_cluster(dataset_dir, q, retrieved, feature_file, match_file, skip=None):
     height, width = cv2.imread(str(dataset_dir / q)).shape[:2]
@@ -123,6 +164,7 @@ def pose_from_cluster(dataset_dir, q, retrieved, feature_file, match_file, skip=
     image_timestamp_map = create_image_timestamp_map(os.path.join(dataset_dir, session_folder, "images.txt"))
     timestamp_trajectory_map = create_timestamp_trajectory_map(os.path.join(dataset_dir, session_folder, "trajectories.txt"))
     depth_filenames = get_depths(os.path.join(dataset_dir, session_folder, "depths.txt"))
+    depth_lut = np.load(os.path.join(dataset_dir, session_folder, "depth_LUT.npy"))
 
     for i, r in enumerate(retrieved):
         file_name = os.path.join(os.path.basename(os.path.dirname(r)), os.path.basename(r))
@@ -142,19 +184,10 @@ def pose_from_cluster(dataset_dir, q, retrieved, feature_file, match_file, skip=
             mkpq, mkpr = kpq[v], kpr[m[v]]
             num_matches += len(mkpq)
 
-            # This rescales the depth images to be as wide as the Hololens greyscale images.
-            depth_map = load_and_rescale_depth_image(os.path.join(dataset_dir, session_folder, depth_folder, depth_filename))
-            # I was manually looking, and this seemed to be the offset of the depth image. Feels like there should be a better way?
-            # TODO: should be different if it's left or right
-            depth_map = np.pad(depth_map, pad_width=((140, 140), (20, 0)), mode='constant', constant_values=0)
-            # truncate to same size as image
-            depth_map = depth_map[:640, :480]
-            # The numbers seemed too small so I rescaled it.  I assume it's being normalized when loaded.  Should double check.
-            depth_map = depth_map*256
-            # just guessing on the focal length, ChatGPT recommended it
-            # TODO: this center is probably not correct, since I'm zero-padding the image.
-            point_cloud = depth_to_point_cloud(depth_map, 256, 256, 240, 320)
-            mkp3d, valid = interpolate_scan(point_cloud, mkpr)
+            depth_file_path = os.path.join(dataset_dir, session_folder, depth_folder, depth_filename)
+            point_cloud = depthmap_img_to_points_3d(depth_file_path, depth_lut)
+            mkp3d, valid = get_3d_points_matching_2d_points(point_cloud, mkpr)
+            # mkp3d = point_cloud # , valid = interpolate_scan(point_cloud, mkpr)
             # valid = [True] * mkpr.shape[0]
             quat = [trajectory['qw'], trajectory['qx'], trajectory['qy'], trajectory['qz']]
             translation = np.array([trajectory['tx'], trajectory['ty'], trajectory['tz']])
@@ -191,7 +224,7 @@ def main(dataset_dir, retrieval, features, matches, results, skip_matches=None):
     assert matches.exists(), matches
 
     retrieval_dict = parse_retrieval(retrieval)
-    queries = list(retrieval_dict.keys())[:2000]
+    queries = list(retrieval_dict.keys())[:100]
 
     feature_file = h5py.File(features, "r", libver="latest")
     match_file = h5py.File(matches, "r", libver="latest")
@@ -207,7 +240,7 @@ def main(dataset_dir, retrieval, features, matches, results, skip_matches=None):
     i = 0
     for q in tqdm(queries):
         db = retrieval_dict[q]
-        if i > 2000:
+        if i > 100:
             break
         try:
             ret, mkpq, mkpr, mkp3d, indices, num_matches = pose_from_cluster(
