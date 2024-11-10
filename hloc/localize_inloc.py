@@ -133,16 +133,17 @@ def load_and_rescale_depth_image(file_path):
 
 def get_3d_points_matching_2d_points(mkp3d, mkpr):
     h, w, c = mkp3d.shape
-    rows = mkpr[:, 0].astype(int)
-    cols = mkpr[:, 1].astype(int)
+    cols = mkpr[:, 0].astype(int)
+    rows = mkpr[:, 1].astype(int)
 
     # Check bounds
-    valid_mask = (rows >= 0) & (rows < h) & (cols >= 0) & (cols < w)
-    rows[~valid_mask] = 0
-    cols[~valid_mask] = 0
+    vertical_offset = 140
+    valid_mask = (rows >= 0 + vertical_offset) & (rows < h + vertical_offset) & (cols >= 0) & (cols < w)
+    rows[~valid_mask] = vertical_offset
+    cols[~valid_mask] = vertical_offset
 
     # Select only valid points
-    selected_points = mkp3d[rows, cols]
+    selected_points = mkp3d[rows - vertical_offset, cols]
     return selected_points, valid_mask
 
 def pose_from_cluster(dataset_dir, q, retrieved, feature_file, match_file, skip=None):
