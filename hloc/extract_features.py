@@ -178,16 +178,15 @@ class ImageDataset(torch.utils.data.Dataset):
             self.names = [Path(p).relative_to(root).as_posix() for p in paths]
             logger.info(f"Found {len(self.names)} images in root {root}.")
         else:
-            if isinstance(paths, (Path, str)):
-                self.names = parse_image_lists(paths)
-            elif isinstance(paths, collections.Iterable):
-                self.names = [p.as_posix() if isinstance(p, Path) else p for p in paths]
-            else:
-                raise ValueError(f"Unknown format for path argument {paths}.")
-
-            for name in self.names:
-                if not (root / name).exists():
-                    raise ValueError(f"Image {name} does not exists in root: {root}.")
+            img_paths = []
+            for p in paths:
+                for g in conf.globs:
+                    img_paths += glob.glob((Path(root, p) / "**" / g).as_posix(), recursive=True)
+            if len(img_paths) == 0:
+                raise ValueError(f"Could not find any image in root: {root}.")
+            paths = sorted(set(img_paths))
+            self.names = [Path(p).relative_to(root).as_posix() for p in paths]
+            logger.info(f"Found {len(self.names)} images in root {root}.")
 
     def __getitem__(self, idx):
         name = self.names[idx]

@@ -1,6 +1,16 @@
 import os
 import pandas as pd
 
+from dataclasses import dataclass
+from numpy import ndarray
+
+@dataclass
+class CaptureData:
+    image_timestamp_map: pd.DataFrame
+    timestamp_trajectory_map: pd.DataFrame
+    depth_filenames: ndarray
+    depth_timestamps: ndarray
+    depth_lut: any
 
 def create_image_timestamp_map(path_to_image_file):
     df = pd.read_csv(path_to_image_file, delimiter=',', names=['timestamp', 'device_id', 'image_name'], skiprows=1, skipinitialspace=True)
