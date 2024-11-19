@@ -23,38 +23,24 @@ matcher_conf = match_features.confs["superglue"]
 retrieval_conf = extract_features.confs["netvlad"]
 reference_sfm = outputs / "sfm_superpoint+superglue"  # the SfM model we will build
 
-image_list = [
-    'hl_2020-12-13-10-20-30-996/processed_data/images/',
-    'hl_2020-12-13-10-28-16-176/processed_data/images/',
-    'hl_2020-12-13-10-31-56-121/processed_data/images/',
-    'hl_2020-12-13-10-38-12-139/processed_data/images/',
-    'hl_2020-12-13-10-45-04-168/processed_data/images/',
-    'hl_2020-12-13-10-48-10-582/processed_data/images/',
-    'hl_2020-12-13-10-51-35-642/processed_data/images/',
-    'hl_2020-12-13-11-02-13-691/processed_data/images/',
-    'hl_2020-12-13-11-22-30-693/processed_data/images/',
-    'hl_2020-12-13-11-28-20-676/processed_data/images/',
-    'ios-random'
-]
-
-global_descriptors = extract_features.main(retrieval_conf, dataset, outputs, image_list=image_list)
+global_descriptors = extract_features.main(retrieval_conf, dataset, outputs)
 
 pairs_from_retrieval.main(
     global_descriptors,
     loc_pairs,
-    5,
-    query_prefix="ios",
-    db_prefix="hl_2020"
+    40,
+    query_prefix="ios-random",
+    db_prefix="hl"
 )
 
-feature_path = extract_features.main(feature_conf, dataset, outputs, image_list=image_list)
+feature_path = extract_features.main(feature_conf, dataset, outputs)
 
 match_path = match_features.main(
     matcher_conf, loc_pairs, feature_conf["output"], outputs
 )
 
 localize_inloc.main(
-    dataset, loc_pairs, feature_path, match_path, results, skip_matches=1
+    dataset, loc_pairs, feature_path, match_path, results, skip_matches=20
 )  # skip database images with too few matches
 
 visualization.visualize_loc(results, dataset, n=1, top_k_db=1, seed=2)

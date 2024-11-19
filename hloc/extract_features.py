@@ -171,7 +171,7 @@ class ImageDataset(torch.utils.data.Dataset):
         if paths is None:
             paths = []
             for g in conf.globs:
-                paths += glob.glob((Path(root) / "**" / g).as_posix(), recursive=True)
+                paths += glob.glob((Path(root) / "**" / "processed_data" / "images" / g).as_posix(), recursive=True)
             if len(paths) == 0:
                 raise ValueError(f"Could not find any image in root: {root}.")
             paths = sorted(set(paths))
@@ -181,7 +181,7 @@ class ImageDataset(torch.utils.data.Dataset):
             img_paths = []
             for p in paths:
                 for g in conf.globs:
-                    img_paths += glob.glob((Path(root, p) / "**" / g).as_posix(), recursive=True)
+                    img_paths += glob.glob((Path(root, p) / "**" / "processed_data" / "images" / g).as_posix(), recursive=True)
             if len(img_paths) == 0:
                 raise ValueError(f"Could not find any image in root: {root}.")
             paths = sorted(set(img_paths))
