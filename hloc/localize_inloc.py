@@ -261,48 +261,34 @@ def main(dataset_dir, q_dir, retrieval, q_features, features, matches, results, 
     r_folders = list(set([Path(r).parts[0] for r in r_paths]))
     capture_data_dict = {}
 
-    global_timestamp_trajectory_map = create_timestamp_trajectory_map("./datasets/HGE/sessions/map/trajectories.txt") | create_timestamp_trajectory_map("./datasets/HGE/sessions/query_val_hololens/trajectories.txt")
-    global_trajectory_map = {}
+    global_timestamp_trajectory_map = create_timestamp_trajectory_map("./datasets/HGE/sessions/map/trajectories.txt") | create_timestamp_trajectory_map("./datasets/HGE/sessions/query_val_hololens/proc/alignment_trajectories.txt")
     xyz = []
     global_transform_map = {}
     for timestamp, trajectory in global_timestamp_trajectory_map.items():
         folder, device_id = trajectory["device_id"].split("/", maxsplit=1)
         folder = folder.split(".")[0]
-        # if folder not in r_folders:
-        #     continue
         trajectory["device_id"] = device_id
-        if folder not in global_trajectory_map:
-            global_trajectory_map[folder] = []
+        if folder not in global_transform_map:
             global_transform_map[folder] = {}
         global_transform_map[folder][timestamp] = create_transform(trajectory)
-        global_trajectory_map[folder].append({
-            "timestamp": timestamp,
-            "transform": create_transform(trajectory),
-            "q": np.array([trajectory['qw'], trajectory['qx'], trajectory['qy'], trajectory['qz']]),
-            "t": np.array([trajectory['tx'], trajectory['ty'], trajectory['tz']])
-        })
         xyz.append([trajectory['tx'], trajectory['ty'], trajectory['tz']])
-    
-    for folder in r_folders:
-        if folder in global_transform_map:
-            timestamp_trajectory_map = create_timestamp_trajectory_map(glob.glob(f"{os.path.join(dataset_dir, folder)}/**/trajectories.txt", recursive=True)[0])
-            for timestamp in global_transform_map[folder].keys():
-                local_trajectory = timestamp_trajectory_map[timestamp]
-                local_transform = create_transform(local_trajectory)
-                global_transform_map[folder][timestamp] @= np.linalg.inv(local_transform)
-
 
     for folder in r_folders:
         image_timestamp_map = create_image_timestamp_map(glob.glob(f"{os.path.join(dataset_dir, folder)}/**/images.txt", recursive=True)[0])
         timestamp_trajectory_map = create_timestamp_trajectory_map(glob.glob(f"{os.path.join(dataset_dir, folder)}/**/trajectories.txt", recursive=True)[0])
         
-        if folder in global_trajectory_map:
+        if folder in global_transform_map:
+            for timestamp in global_transform_map[folder].keys():
+                local_trajectory = timestamp_trajectory_map[timestamp]
+                local_transform = create_transform(local_trajectory)
+                global_transform_map[folder][timestamp] @= np.linalg.inv(local_transform)
+            
             depth_files = get_depths(glob.glob(f"{os.path.join(dataset_dir, folder)}/**/depths.txt", recursive=True)[0])
             depth_timestamps = np.array([int(filename.split('.')[0]) for filename in depth_files], dtype=np.int64)
             depth_LUT = np.load(glob.glob(f"{os.path.join(dataset_dir, folder)}/**/depth_LUT.npy", recursive=True)[0])
             capture_data_dict[folder] = CaptureData(image_timestamp_map, timestamp_trajectory_map, global_transform_map[folder], depth_files, depth_timestamps, depth_LUT)
         else:
-            print("folder doesn't exist :( ", folder)
+            print("session folder doesn't have global coordinates ", folder)
 
     feature_file = h5py.File(features, "r", libver="latest")
     q_feature_file = h5py.File(q_features, "r", libver="latest")
