@@ -17,9 +17,6 @@ from hloc.utils.base_model import dynamic_load
 from hloc.utils.parsers import names_to_pair, names_to_pair_old, parse_retrieval
 
 DATASET = Path("datasets/lamar-hg/")  # change this if your dataset is somewhere else
-PAIRS = Path("pairs/lamar-hg/")
-OUTPUT = Path("outputs/lamar-hg/")  # where everything will be saved
-
 
 QUERY_IMAGE_DIR = Path("temp/input/")
 QUERY_IMAGE_PATH =  Path("processed_data/images")
@@ -27,22 +24,13 @@ QUERY_OUTPUT = Path("temp/output/")
 QUERY_PAIRS = Path("temp/pairs/generated-pairs.txt")
 QUERY_RESULT = Path("temp/output/InLoc_hloc_superpoint+superglue_netvlad40.txt")
 
-os.makedirs(QUERY_IMAGE_DIR / QUERY_IMAGE_PATH, exist_ok = True)
-os.makedirs(QUERY_PAIRS.parent, exist_ok = True)
-os.makedirs(QUERY_OUTPUT, exist_ok = True)
-
-
-DB_DESCRIPTORS = OUTPUT / "global-feats-netvlad.h5"
-
-DB_FEATURE_PATH = Path("./outputs/lamar-hg/feats-superpoint-n4096-r1600.h5")
+DB_DESCRIPTORS = Path("outputs/lamar-hg/global-feats-netvlad.h5")
+DB_FEATURE_PATH = Path("outputs/lamar-hg/feats-superpoint-n4096-r1600.h5")
 
 FEATURE_CONF = extract_features.confs["superpoint_inloc"]
 RETRIEVAL_CONF = extract_features.confs["netvlad"]
 MATCHER_CONF = match_features.confs["superglue"]
 
-# localize_inloc.main(
-#     dataset, loc_pairs, feature_path, match_path, results, skip_matches=20
-# )
 
 class FeatureExtractor:
     @torch.no_grad()
@@ -198,13 +186,6 @@ def localize_image_(image_path: Path):
     query_features = feature_extractor.extract_features(QUERY_IMAGE_DIR, QUERY_OUTPUT)
 
     match_path = matcher.match(QUERY_PAIRS, QUERY_OUTPUT, FEATURE_CONF["output"], DB_FEATURE_PATH)
-    # match_path = match_features.main(
-    #     MATCHER_CONF,
-    #     QUERY_PAIRS,
-    #     FEATURE_CONF["output"],
-    #     QUERY_OUTPUT,
-    #     features_ref=DB_FEATURE_PATH
-    # )
 
     results = localize_inloc.main(
         DATASET, QUERY_IMAGE_DIR, QUERY_PAIRS, query_features, DB_FEATURE_PATH, match_path, QUERY_RESULT, skip_matches=20
@@ -212,6 +193,10 @@ def localize_image_(image_path: Path):
 
     return results.get("image.jpg", (None, None))
 
+
+os.makedirs(QUERY_IMAGE_DIR / QUERY_IMAGE_PATH, exist_ok = True)
+os.makedirs(QUERY_PAIRS.parent, exist_ok = True)
+os.makedirs(QUERY_OUTPUT, exist_ok = True)
 
 for img_path in glob.glob("./datasets/lamar-hg/hl_2020-12-13-10-20-30-996/processed_data/images/*.jpg")[:10]:
     image = np.asarray(Image.open(img_path))
