@@ -22,7 +22,6 @@ from . import logger
 from .utils.parsers import names_to_pair, parse_retrieval
 from .image_timestamp_mapping import create_image_timestamp_map, create_timestamp_trajectory_map, get_depths, CaptureData
 
-import matplotlib.pyplot as plt
 
 def create_transform(trajectory):
     rotation = R.from_quat([trajectory['qw'], trajectory['qx'], trajectory['qy'], trajectory['qz']], scalar_first=True).as_matrix()
@@ -227,6 +226,7 @@ def pose_from_cluster(dataset_dir, query_dir, q, q_feature_file, retrieved, feat
             all_mkp3d.append(mkp3d[valid])
             all_indices.append(np.full(np.count_nonzero(valid), i))
         except Exception as e:
+            print("pose_from_cluster")
             print(repr(e))
             continue
 
@@ -262,7 +262,6 @@ def main(dataset_dir, q_dir, retrieval, q_features, features, matches, results, 
     capture_data_dict = {}
 
     global_timestamp_trajectory_map = create_timestamp_trajectory_map("./datasets/HGE/sessions/map/trajectories.txt") | create_timestamp_trajectory_map("./datasets/HGE/sessions/query_val_hololens/proc/alignment_trajectories.txt")
-    xyz = []
     global_transform_map = {}
     for timestamp, trajectory in global_timestamp_trajectory_map.items():
         folder, device_id = trajectory["device_id"].split("/", maxsplit=1)
@@ -271,7 +270,7 @@ def main(dataset_dir, q_dir, retrieval, q_features, features, matches, results, 
         if folder not in global_transform_map:
             global_transform_map[folder] = {}
         global_transform_map[folder][timestamp] = create_transform(trajectory)
-        xyz.append([trajectory['tx'], trajectory['ty'], trajectory['tz']])
+        
 
     for folder in r_folders:
         image_timestamp_map = create_image_timestamp_map(glob.glob(f"{os.path.join(dataset_dir, folder)}/**/images.txt", recursive=True)[0])
@@ -294,7 +293,6 @@ def main(dataset_dir, q_dir, retrieval, q_features, features, matches, results, 
     q_feature_file = h5py.File(q_features, "r", libver="latest")
     match_file = h5py.File(matches, "r", libver="latest")
 
-    poses = {}
     logs = {
         "query features": q_features,
         "features": features,
@@ -302,6 +300,7 @@ def main(dataset_dir, q_dir, retrieval, q_features, features, matches, results, 
         "retrieval": retrieval,
         "loc": {},
     }
+    result_dict = {}
     logger.info("Starting localization...")
     i = 0
     for q in tqdm(queries):
@@ -317,16 +316,8 @@ def main(dataset_dir, q_dir, retrieval, q_features, features, matches, results, 
 
             qvec = ret["cam_from_world"].rotation.quat # xyzw
             tvec = ret["cam_from_world"].translation
-            xyz = np.array(xyz)
-            fig = plt.figure(figsize=(12, 12))
-            ax = fig.add_subplot(projection='3d')
-            ax.scatter(xyz[:,0], xyz[:,1], xyz[:,2], [1.0,0,0])
-            ax.scatter(mkp3d[:,0],mkp3d[:,1],mkp3d[:,2], [0,1.0,0])
-            ax.scatter([tvec[0]], [tvec[1]], [tvec[2]], [0,0,1.0])
-            plt.show()
 
             # poses[q] = (ret["qvec"], ret["tvec"])
-            poses[q] = (qvec, tvec)
             logs["loc"][q] = {
                 "db": db,
                 "PnP_ret": ret,
@@ -336,6 +327,13 @@ def main(dataset_dir, q_dir, retrieval, q_features, features, matches, results, 
                 "indices_db": indices,
                 "num_matches": num_matches,
             }
+
+            result_dict[q] = {
+                "t": tvec,
+                "q": qvec,
+                "3d_points": mkp3d
+            }
+
             i += 1
         except ValueError:
             continue
@@ -343,16 +341,15 @@ def main(dataset_dir, q_dir, retrieval, q_features, features, matches, results, 
             continue
 
     logger.info(f"Writing poses to {results}...")
-    result_dict = {}
     with open(results, "w") as f:
         for q in queries:
-            if q in poses:
-                qvec, tvec = poses[q]
+            if q in result_dict:
+                tvec = result_dict[q]["t"]
+                qvec = result_dict[q]["q"]
                 qvec = " ".join(map(str, qvec))
                 tvec = " ".join(map(str, tvec))
                 name = q.split("/")[-1]
                 f.write(f"{name} {qvec} {tvec}\n")
-                result_dict[name] = poses[q]
             else:
                 print(f"Couldn't localize {q}")
 
