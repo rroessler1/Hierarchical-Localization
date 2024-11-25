@@ -8,6 +8,7 @@ from numpy import ndarray
 class CaptureData:
     image_timestamp_map: pd.DataFrame
     timestamp_trajectory_map: pd.DataFrame
+    timestamp_transfrom_map: dict
     depth_filenames: ndarray
     depth_timestamps: ndarray
     depth_lut: any

@@ -9,8 +9,10 @@ from hloc.image_timestamp_mapping import create_image_timestamp_map, create_time
 camera = "hetlf"
 
 def process_session(session_dir):
+
+    raw_folder = os.path.join(session_dir, "raw_data")
     depth_file = os.path.join(session_dir, "depths.txt")
-    if not os.path.isfile(depth_file):
+    if not os.path.isfile(depth_file) or not os.path.isdir(raw_folder):
         print(f"session {session_dir} is invalid")
         return
     image_timestamp_map = create_image_timestamp_map(os.path.join(session_dir, "images.txt"))

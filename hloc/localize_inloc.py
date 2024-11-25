@@ -22,6 +22,17 @@ from . import logger
 from .utils.parsers import names_to_pair, parse_retrieval
 from .image_timestamp_mapping import create_image_timestamp_map, create_timestamp_trajectory_map, get_depths, CaptureData
 
+import matplotlib.pyplot as plt
+
+def create_transform(trajectory):
+    rotation = R.from_quat([trajectory['qw'], trajectory['qx'], trajectory['qy'], trajectory['qz']], scalar_first=True).as_matrix()
+    translation = np.array([trajectory['tx'], trajectory['ty'], trajectory['tz']])
+    
+    transform = np.eye(4)
+    transform[:3, :3] = rotation
+    transform[:3, 3] = translation
+
+    return transform
 
 def interpolate_scan(scan, kp):
     h, w, c = scan.shape
@@ -151,8 +162,8 @@ def get_3d_points_matching_2d_points(mkp3d, mkpr):
     valid_mask = np.logical_and(valid_mask, np.all(selected_points != 0, axis=1))
     return selected_points, valid_mask
 
-def pose_from_cluster(dataset_dir, q, retrieved, feature_file, match_file, capture_data_dict, skip=None):
-    height, width = cv2.imread(str(dataset_dir / q)).shape[:2]
+def pose_from_cluster(dataset_dir, query_dir, q, q_feature_file, retrieved, feature_file, match_file, capture_data_dict, skip=None):    
+    height, width = cv2.imread(str(query_dir / q)).shape[:2]
     cx = 0.5 * width
     cy = 0.5 * height
     focal_length = 4032.0 * 28.0 / 36.0
@@ -160,8 +171,9 @@ def pose_from_cluster(dataset_dir, q, retrieved, feature_file, match_file, captu
     all_mkpq = []
     all_mkpr = []
     all_mkp3d = []
+    all_mkp3d_global = []
     all_indices = []
-    kpq = feature_file[q]["keypoints"].__array__()
+    kpq = q_feature_file[q]["keypoints"].__array__()
     num_matches = 0
 
     for i, r in enumerate(retrieved):
@@ -190,7 +202,6 @@ def pose_from_cluster(dataset_dir, q, retrieved, feature_file, match_file, captu
             # so then, this gets all the valid match points from q, and the corresponding match from r
             mkpq, mkpr = kpq[v], kpr[m[v]]
             num_matches += len(mkpq)
-
             depth_file_paths = glob.glob(f"{os.path.join(dataset_dir, leading_folder_name, 'processed_data')}/**/{depth_filename}", recursive=True)
             if len(depth_file_paths) > 1:
                 print(f"Found multiple depth files [{depth_filename}] in path [{os.path.join(dataset_dir, leading_folder_name)}]")
@@ -199,10 +210,17 @@ def pose_from_cluster(dataset_dir, q, retrieved, feature_file, match_file, captu
             mkp3d, valid = get_3d_points_matching_2d_points(point_cloud, mkpr)
             # mkp3d = point_cloud # , valid = interpolate_scan(point_cloud, mkpr)
             # valid = [True] * mkpr.shape[0]
-            quat = [trajectory['qw'], trajectory['qx'], trajectory['qy'], trajectory['qz']]
-            translation = np.array([trajectory['tx'], trajectory['ty'], trajectory['tz']])
-            # Tr = get_scan_pose(dataset_dir, r)
-            mkp3d = (R.from_quat(quat).as_matrix() @ mkp3d.T + translation[:, np.newaxis]).T
+
+            transform_timestamps = list(capture_data.timestamp_transfrom_map.keys())
+            transform_idx = np.searchsorted(transform_timestamps, file_timestamp)
+            if idx == len(transform_timestamps) or (idx > 0 and file_timestamp - transform_timestamps[idx-1] < transform_timestamps[idx] - file_timestamp):
+                transform_idx -= 1
+            
+            local_transform = create_transform(trajectory)
+            global_transform = capture_data.timestamp_transfrom_map[transform_timestamps[transform_idx]]
+
+            mkp3d = np.hstack([mkp3d, np.ones((len(mkp3d),1))])
+            mkp3d = (global_transform @ local_transform @ mkp3d.T).T[:,:3]
 
             all_mkpq.append(mkpq[valid])
             all_mkpr.append(mkpr[valid])
@@ -223,12 +241,15 @@ def pose_from_cluster(dataset_dir, q, retrieved, feature_file, match_file, captu
         "height": height,
         "params": [focal_length, cx, cy],
     }
-    ret = pycolmap.absolute_pose_estimation(all_mkpq, all_mkp3d, cfg, 48.00)
+
+    # ret = pycolmap.absolute_pose_estimation(all_mkpq.astype(np.float64), all_mkp3d, pycolmap.Camera(**cfg), 48.00)
+    # ret = pycolmap.absolute_pose_estimation(all_mkpq, all_mkp3d, cfg, estimation_options={'ransac': {'max_error': 48.0}})
+    ret = pycolmap.absolute_pose_estimation(all_mkpq, all_mkp3d, pycolmap.Camera(**cfg))
     ret["cfg"] = cfg
     return ret, all_mkpq, all_mkpr, all_mkp3d, all_indices, num_matches
 
 
-def main(dataset_dir, retrieval, features, matches, results, skip_matches=None):
+def main(dataset_dir, q_dir, retrieval, q_features, features, matches, results, skip_matches=None):
     assert retrieval.exists(), retrieval
     assert features.exists(), features
     assert matches.exists(), matches
@@ -240,19 +261,56 @@ def main(dataset_dir, retrieval, features, matches, results, skip_matches=None):
     r_folders = list(set([Path(r).parts[0] for r in r_paths]))
     capture_data_dict = {}
 
+    global_timestamp_trajectory_map = create_timestamp_trajectory_map("./datasets/HGE/sessions/map/trajectories.txt") | create_timestamp_trajectory_map("./datasets/HGE/sessions/query_val_hololens/trajectories.txt")
+    global_trajectory_map = {}
+    xyz = []
+    global_transform_map = {}
+    for timestamp, trajectory in global_timestamp_trajectory_map.items():
+        folder, device_id = trajectory["device_id"].split("/", maxsplit=1)
+        folder = folder.split(".")[0]
+        # if folder not in r_folders:
+        #     continue
+        trajectory["device_id"] = device_id
+        if folder not in global_trajectory_map:
+            global_trajectory_map[folder] = []
+            global_transform_map[folder] = {}
+        global_transform_map[folder][timestamp] = create_transform(trajectory)
+        global_trajectory_map[folder].append({
+            "timestamp": timestamp,
+            "transform": create_transform(trajectory),
+            "q": np.array([trajectory['qw'], trajectory['qx'], trajectory['qy'], trajectory['qz']]),
+            "t": np.array([trajectory['tx'], trajectory['ty'], trajectory['tz']])
+        })
+        xyz.append([trajectory['tx'], trajectory['ty'], trajectory['tz']])
+    
+    for folder in r_folders:
+        if folder in global_transform_map:
+            timestamp_trajectory_map = create_timestamp_trajectory_map(glob.glob(f"{os.path.join(dataset_dir, folder)}/**/trajectories.txt", recursive=True)[0])
+            for timestamp in global_transform_map[folder].keys():
+                local_trajectory = timestamp_trajectory_map[timestamp]
+                local_transform = create_transform(local_trajectory)
+                global_transform_map[folder][timestamp] @= np.linalg.inv(local_transform)
+
+
     for folder in r_folders:
         image_timestamp_map = create_image_timestamp_map(glob.glob(f"{os.path.join(dataset_dir, folder)}/**/images.txt", recursive=True)[0])
         timestamp_trajectory_map = create_timestamp_trajectory_map(glob.glob(f"{os.path.join(dataset_dir, folder)}/**/trajectories.txt", recursive=True)[0])
-        depth_files = get_depths(glob.glob(f"{os.path.join(dataset_dir, folder)}/**/depths.txt", recursive=True)[0])
-        depth_timestamps = np.vectorize(lambda filename: int(filename.split('.')[0]))(depth_files).astype(int)
-        depth_LUT = np.load(glob.glob(f"{os.path.join(dataset_dir, folder)}/**/depth_LUT.npy", recursive=True)[0])
-        capture_data_dict[folder] = CaptureData(image_timestamp_map, timestamp_trajectory_map, depth_files, depth_timestamps, depth_LUT)
+        
+        if folder in global_trajectory_map:
+            depth_files = get_depths(glob.glob(f"{os.path.join(dataset_dir, folder)}/**/depths.txt", recursive=True)[0])
+            depth_timestamps = np.array([int(filename.split('.')[0]) for filename in depth_files], dtype=np.int64)
+            depth_LUT = np.load(glob.glob(f"{os.path.join(dataset_dir, folder)}/**/depth_LUT.npy", recursive=True)[0])
+            capture_data_dict[folder] = CaptureData(image_timestamp_map, timestamp_trajectory_map, global_transform_map[folder], depth_files, depth_timestamps, depth_LUT)
+        else:
+            print("folder doesn't exist :( ", folder)
 
     feature_file = h5py.File(features, "r", libver="latest")
+    q_feature_file = h5py.File(q_features, "r", libver="latest")
     match_file = h5py.File(matches, "r", libver="latest")
 
     poses = {}
     logs = {
+        "query features": q_features,
         "features": features,
         "matches": matches,
         "retrieval": retrieval,
@@ -266,10 +324,23 @@ def main(dataset_dir, retrieval, features, matches, results, skip_matches=None):
             break
         try:
             ret, mkpq, mkpr, mkp3d, indices, num_matches = pose_from_cluster(
-                dataset_dir, q, db, feature_file, match_file, capture_data_dict, skip_matches
+                dataset_dir, q_dir, q, q_feature_file, db, feature_file, match_file, capture_data_dict, skip_matches
             )
 
-            poses[q] = (ret["qvec"], ret["tvec"])
+            print(ret)
+
+            qvec = ret["cam_from_world"].rotation.quat # xyzw
+            tvec = ret["cam_from_world"].translation
+            xyz = np.array(xyz)
+            fig = plt.figure(figsize=(12, 12))
+            ax = fig.add_subplot(projection='3d')
+            ax.scatter(xyz[:,0], xyz[:,1], xyz[:,2], [1.0,0,0])
+            ax.scatter(mkp3d[:,0],mkp3d[:,1],mkp3d[:,2], [0,1.0,0])
+            ax.scatter([tvec[0]], [tvec[1]], [tvec[2]], [0,0,1.0])
+            plt.show()
+
+            # poses[q] = (ret["qvec"], ret["tvec"])
+            poses[q] = (qvec, tvec)
             logs["loc"][q] = {
                 "db": db,
                 "PnP_ret": ret,
@@ -286,6 +357,7 @@ def main(dataset_dir, retrieval, features, matches, results, skip_matches=None):
             continue
 
     logger.info(f"Writing poses to {results}...")
+    result_dict = {}
     with open(results, "w") as f:
         for q in queries:
             if q in poses:
@@ -294,6 +366,7 @@ def main(dataset_dir, retrieval, features, matches, results, skip_matches=None):
                 tvec = " ".join(map(str, tvec))
                 name = q.split("/")[-1]
                 f.write(f"{name} {qvec} {tvec}\n")
+                result_dict[name] = poses[q]
             else:
                 print(f"Couldn't localize {q}")
 
@@ -302,6 +375,8 @@ def main(dataset_dir, retrieval, features, matches, results, skip_matches=None):
     with open(logs_path, "wb") as f:
         pickle.dump(logs, f)
     logger.info("Done!")
+
+    return result_dict
 
 
 if __name__ == "__main__":
