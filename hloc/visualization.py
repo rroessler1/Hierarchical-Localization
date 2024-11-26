@@ -66,6 +66,7 @@ def visualize_sfm_2d(
 def visualize_loc(
     results,
     image_dir,
+    query_dir,
     reconstruction=None,
     db_image_dir=None,
     selected=[],
@@ -92,12 +93,13 @@ def visualize_loc(
     for qname in selected:
         loc = logs["loc"][qname]
         visualize_loc_from_log(
-            image_dir, qname, loc, reconstruction, db_image_dir, **kwargs
+            image_dir, query_dir, qname, loc, reconstruction, db_image_dir, **kwargs
         )
 
 
 def visualize_loc_from_log(
     image_dir,
+    query_dir,
     query_name,
     loc,
     reconstruction=None,
@@ -105,7 +107,7 @@ def visualize_loc_from_log(
     top_k_db=2,
     dpi=75,
 ):
-    q_image = read_image(image_dir / query_name)
+    q_image = read_image(query_dir / query_name)
     if loc.get("covisibility_clustering", False):
         # select the first, largest cluster if the localization failed
         loc = loc["log_clusters"][loc["best_cluster"] or 0]

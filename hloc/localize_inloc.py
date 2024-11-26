@@ -163,14 +163,17 @@ def get_3d_points_matching_2d_points(mkp3d, mkpr):
 
 def pose_from_cluster(dataset_dir, query_dir, q, q_feature_file, retrieved, feature_file, match_file, capture_data_dict, skip=None):    
     height, width = cv2.imread(str(query_dir / q)).shape[:2]
-    cx = 0.5 * width
-    cy = 0.5 * height
-    focal_length = 4032.0 * 28.0 / 36.0
+    # cx = 0.5 * width
+    # cy = 0.5 * height
+    # TODO: These might be different in Magic Leap (These are for session hl_2020-12-13-10-20-30-996/hetlf)
+    cx = 235.031
+    cy = 288.286
+    fx = 363.32
+    fy = 360.299
 
     all_mkpq = []
     all_mkpr = []
     all_mkp3d = []
-    all_mkp3d_global = []
     all_indices = []
     kpq = q_feature_file[q]["keypoints"].__array__()
     num_matches = 0
@@ -212,7 +215,7 @@ def pose_from_cluster(dataset_dir, query_dir, q, q_feature_file, retrieved, feat
 
             transform_timestamps = list(capture_data.timestamp_transfrom_map.keys())
             transform_idx = np.searchsorted(transform_timestamps, file_timestamp)
-            if idx == len(transform_timestamps) or (idx > 0 and file_timestamp - transform_timestamps[idx-1] < transform_timestamps[idx] - file_timestamp):
+            if transform_idx == len(transform_timestamps) or (transform_idx > 0 and file_timestamp - transform_timestamps[transform_idx-1] < transform_timestamps[transform_idx] - file_timestamp):
                 transform_idx -= 1
             
             local_transform = create_transform(trajectory)
@@ -236,15 +239,14 @@ def pose_from_cluster(dataset_dir, query_dir, q, q_feature_file, retrieved, feat
     all_indices = np.concatenate(all_indices, 0)
 
     cfg = {
-        "model": "SIMPLE_PINHOLE",
+        "model": "PINHOLE",
         "width": width,
         "height": height,
-        "params": [focal_length, cx, cy],
+        "params": [fx, fy, cx, cy],
     }
 
     # ret = pycolmap.absolute_pose_estimation(all_mkpq.astype(np.float64), all_mkp3d, pycolmap.Camera(**cfg), 48.00)
-    # ret = pycolmap.absolute_pose_estimation(all_mkpq, all_mkp3d, cfg, estimation_options={'ransac': {'max_error': 48.0}})
-    ret = pycolmap.absolute_pose_estimation(all_mkpq, all_mkp3d, pycolmap.Camera(**cfg))
+    ret = pycolmap.absolute_pose_estimation(all_mkpq, all_mkp3d, cfg, estimation_options={'ransac': {'max_error': 48.0}})
     ret["cfg"] = cfg
     return ret, all_mkpq, all_mkpr, all_mkp3d, all_indices, num_matches
 
@@ -314,10 +316,10 @@ def main(dataset_dir, q_dir, retrieval, q_features, features, matches, results, 
 
             print(ret)
 
-            qvec = ret["cam_from_world"].rotation.quat # xyzw
-            tvec = ret["cam_from_world"].translation
+            camera_transform =  ret["cam_from_world"].inverse()
+            qvec = camera_transform.rotation.quat
+            tvec = camera_transform.translation
 
-            # poses[q] = (ret["qvec"], ret["tvec"])
             logs["loc"][q] = {
                 "db": db,
                 "PnP_ret": ret,

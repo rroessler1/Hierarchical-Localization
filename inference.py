@@ -16,6 +16,7 @@ from hloc.match_features import FeaturePairsDataset, WorkQueue, find_unique_new_
 from hloc.utils.base_model import dynamic_load
 from hloc.utils.parsers import names_to_pair, names_to_pair_old, parse_retrieval
 from hloc.localize_inloc import create_transform
+from hloc.image_timestamp_mapping import create_image_timestamp_map, create_timestamp_trajectory_map
 
 import matplotlib.pyplot as plt
 
@@ -34,10 +35,6 @@ FEATURE_CONF = extract_features.confs["superpoint_inloc"]
 RETRIEVAL_CONF = extract_features.confs["netvlad"]
 MATCHER_CONF = match_features.confs["superglue"]
 
-
-os.makedirs(QUERY_IMAGE_DIR / QUERY_IMAGE_PATH, exist_ok = True)
-os.makedirs(QUERY_PAIRS.parent, exist_ok = True)
-os.makedirs(QUERY_OUTPUT, exist_ok = True)
 
 class FeatureExtractor:
     @torch.no_grad()
@@ -168,65 +165,121 @@ class Matcher:
         return match_path
 
 
-retrieval_feature_extractor = FeatureExtractor(RETRIEVAL_CONF, overwrite=True)
-feature_extractor = FeatureExtractor(FEATURE_CONF, overwrite=True)
-matcher = Matcher(MATCHER_CONF, overwrite=True)
+class HLoc:
+    def __init__(self, num_pairs = 5) -> None:
+        self.num_pairs = num_pairs
 
-def localize_image(image, groundtruth):
-    image_path = QUERY_IMAGE_DIR / QUERY_IMAGE_PATH / "image.jpg"
-    Image.fromarray(image).save(image_path)
-    results: dict = localize_image_(image_path, groundtruth)
-    return results.get("q",None), results.get("t", None)
+        self.retrieval_feature_extractor = FeatureExtractor(RETRIEVAL_CONF, overwrite=True)
+        self.feature_extractor = FeatureExtractor(FEATURE_CONF, overwrite=True)
+        self.matcher = Matcher(MATCHER_CONF, overwrite=True)
 
-def localize_image_(image_path: Path, groundtruth):
+        os.makedirs(QUERY_IMAGE_DIR / QUERY_IMAGE_PATH, exist_ok = True)
+        os.makedirs(QUERY_PAIRS.parent, exist_ok = True)
+        os.makedirs(QUERY_OUTPUT, exist_ok = True)
 
-    query_descriptors = retrieval_feature_extractor.extract_features(QUERY_IMAGE_DIR, QUERY_OUTPUT)
+    def localize_image(self, image):
+        image_path = QUERY_IMAGE_DIR / QUERY_IMAGE_PATH / "image.jpg"
+        Image.fromarray(image).save(image_path)
+        results: dict = self.localize_image_(image_path)
+        # return results.get("q",None), results.get("t", None)
+        return results # for debugging purposes
     
-    pairs_from_retrieval.main(
-        query_descriptors,
-        QUERY_PAIRS,
-        40,
-        query_list=[image_path.relative_to(QUERY_IMAGE_DIR).as_posix()],
-        db_descriptors=DB_DESCRIPTORS
-    )
+    def localize_image_(self, image_path: Path):
 
-    # this removes all pairs found with sessions without global alignment
+        query_descriptors = self.retrieval_feature_extractor.extract_features(QUERY_IMAGE_DIR, QUERY_OUTPUT)
+        
+        pairs_from_retrieval.main(
+            query_descriptors,
+            QUERY_PAIRS,
+            self.num_pairs,
+            query_list=[image_path.relative_to(QUERY_IMAGE_DIR).as_posix()],
+            db_descriptors=DB_DESCRIPTORS
+        )
+
+        # TODO: only have features that have global alignment then this is unecessary
+        # this removes all pairs found with sessions without global alignment
+        global_timestamp_trajectory_map = create_timestamp_trajectory_map("./datasets/HGE/sessions/map/trajectories.txt") | create_timestamp_trajectory_map("./datasets/HGE/sessions/query_val_hololens/proc/alignment_trajectories.txt")
+        global_aligment_sessions = set()
+        for trajectory in global_timestamp_trajectory_map.values():
+            folder = trajectory["device_id"].split(".")[0]
+            global_aligment_sessions.add(folder)
+
+        with open(QUERY_PAIRS, "r") as f:
+            lines = f.readlines()
+        with open(QUERY_PAIRS, "w") as f:
+            for line in lines:
+                session = line.split(' ')[-1].split('/')[0]
+                if session in global_aligment_sessions:
+                    f.write(line)
+                else:
+                    print("deleted line: ", line)
+
+
+        query_features = self.feature_extractor.extract_features(QUERY_IMAGE_DIR, QUERY_OUTPUT)
+
+        match_path = self.matcher.match(QUERY_PAIRS, QUERY_OUTPUT, FEATURE_CONF["output"], DB_FEATURE_PATH)
+
+        results = localize_inloc.main(
+            DATASET, QUERY_IMAGE_DIR, QUERY_PAIRS, query_features, DB_FEATURE_PATH, match_path, QUERY_RESULT, skip_matches=20
+        )  # skip database images with too few matches
+
+        image_name = image_path.relative_to(QUERY_IMAGE_DIR).as_posix()
+
+        return results.get(image_name, {})
+
+
+def main():
+    test_folder = "./datasets/lamar-hg/hl_2020-12-13-10-20-30-996"
+    img_paths = np.array(glob.glob(os.path.join(test_folder, "processed_data/images/*.jpg")))
+    np.random.shuffle(img_paths)
+    img_paths = img_paths[:3]
+    
+    hloc = HLoc()
+
     global_timestamp_trajectory_map = create_timestamp_trajectory_map("./datasets/HGE/sessions/map/trajectories.txt") | create_timestamp_trajectory_map("./datasets/HGE/sessions/query_val_hololens/proc/alignment_trajectories.txt")
-    global_aligment_sessions = set()
-    for trajectory in global_timestamp_trajectory_map.values():
-        folder = trajectory["device_id"].split(".")[0]
-        global_aligment_sessions.add(folder)
+    global_xyz = np.array([[trajectory['tx'], trajectory['ty'], trajectory['tz']] for trajectory in global_timestamp_trajectory_map.values()])
 
-    with open(QUERY_PAIRS, "r") as f:
-        lines = f.readlines()
-    with open(QUERY_PAIRS, "w") as f:
-        for line in lines:
-            session = line.split(' ')[-1].split('/')[0]
-            if session in global_aligment_sessions:
-                f.write(line)
-            else:
-                print("deleted line: ", line)
+    for img_path in img_paths:
 
-
-    query_features = feature_extractor.extract_features(QUERY_IMAGE_DIR, QUERY_OUTPUT)
-
-    match_path = matcher.match(QUERY_PAIRS, QUERY_OUTPUT, FEATURE_CONF["output"], DB_FEATURE_PATH)
-
-    results = localize_inloc.main(
-        DATASET, QUERY_IMAGE_DIR, QUERY_PAIRS, query_features, DB_FEATURE_PATH, match_path, QUERY_RESULT, skip_matches=20
-    )  # skip database images with too few matches
-
-    image_name = image_path.relative_to(QUERY_IMAGE_DIR).as_posix()
-
-    if image_name in results:
-        points_3d = results[image_name]["3d_points"]
-        tvec = results[image_name]["t"]
+        image_timestamp_map = create_image_timestamp_map(glob.glob(f"{test_folder}/**/images.txt", recursive=True)[0])
+        timestamp_trajectory_map = create_timestamp_trajectory_map(glob.glob(f"{test_folder}/**/trajectories.txt", recursive=True)[0])
+        image_name = os.path.join("hetlf", Path(img_path).name)
+        image_timestamp = image_timestamp_map[image_name]["timestamp"]
+        groundtruth_trajectory = timestamp_trajectory_map[image_timestamp]
+        groundtruth_local = np.array([groundtruth_trajectory["tx"], groundtruth_trajectory["ty"], groundtruth_trajectory["tz"], 1])
 
         global_timestamp_trajectory_map = create_timestamp_trajectory_map("./datasets/HGE/sessions/map/trajectories.txt") | create_timestamp_trajectory_map("./datasets/HGE/sessions/query_val_hololens/proc/alignment_trajectories.txt")
-        global_xyz = np.array([[trajectory['tx'], trajectory['ty'], trajectory['tz']] for trajectory in global_timestamp_trajectory_map.values()])
+        global_transform = None
+        min_time_diff = float('inf')
+        for timestamp, trajectory in global_timestamp_trajectory_map.items():
+            folder, device_id = trajectory["device_id"].split("/", maxsplit=1)
+            folder = folder.split(".")[0]
+            if folder == Path(test_folder).name:
+                curr_time_diff = abs(image_timestamp - timestamp)
+                if curr_time_diff < min_time_diff:
+                    min_time_diff = curr_time_diff
+                    local_transform = create_transform(timestamp_trajectory_map[timestamp])
+                    global_transform = create_transform(trajectory) @ np.linalg.inv(local_transform) # make global_transform local -> global
+
+        groundtruth = (global_transform @ groundtruth_local.T).T[:3]
+
+        image = np.asarray(Image.open(img_path))
+
+        results = hloc.localize_image(image)
+
+        visualization.visualize_loc(QUERY_RESULT, DATASET, QUERY_IMAGE_DIR, n=1, top_k_db=3, seed=2)
+
+        points_3d = results["3d_points"]
+        tvec = results["t"]
+
+        print("groundtruth: ", groundtruth)
+        print("predicted: ", tvec)
+        print("dist: ", np.linalg.norm(groundtruth - tvec))
+        print("projected dist: ", np.linalg.norm((groundtruth - tvec)[:2]))
 
         fig = plt.figure(figsize=(12, 12))
         ax = fig.add_subplot(projection='3d')
+
         # ax.plot(coorx, coory, coorz, markersize = 1, marker = 'o', alpha = 1, c = 'white', zorder = 0, linestyle = '', alpha = 1)
         ax.scatter([groundtruth[0]], [groundtruth[1]], [groundtruth[2]], c = 'red', zorder=4)
         ax.scatter([tvec[0]], [tvec[1]], [tvec[2]], c = 'green', zorder=3)
@@ -235,40 +288,6 @@ def localize_image_(image_path: Path, groundtruth):
         
         plt.show()
 
-    return results.get(image_name, {})
 
-
-from hloc.image_timestamp_mapping import create_image_timestamp_map, create_timestamp_trajectory_map
-
-test_folder = "./datasets/lamar-hg/hl_2020-12-13-10-20-30-996"
-
-for img_path in glob.glob(os.path.join(test_folder, "processed_data/images/*.jpg"))[:10]:
-
-    image_timestamp_map = create_image_timestamp_map(glob.glob(f"{test_folder}/**/images.txt", recursive=True)[0])
-    timestamp_trajectory_map = create_timestamp_trajectory_map(glob.glob(f"{test_folder}/**/trajectories.txt", recursive=True)[0])
-    image_name = os.path.join("hetlf", Path(img_path).name)
-    image_timestamp = image_timestamp_map[image_name]["timestamp"]
-    groundtruth_trajectory = timestamp_trajectory_map[image_timestamp]
-    groundtruth_local = np.array([groundtruth_trajectory["tx"], groundtruth_trajectory["ty"], groundtruth_trajectory["tz"], 1])
-
-    global_timestamp_trajectory_map = create_timestamp_trajectory_map("./datasets/HGE/sessions/map/trajectories.txt") | create_timestamp_trajectory_map("./datasets/HGE/sessions/query_val_hololens/proc/alignment_trajectories.txt")
-    global_transform = None
-    min_time_diff = float('inf')
-    for timestamp, trajectory in global_timestamp_trajectory_map.items():
-        folder, device_id = trajectory["device_id"].split("/", maxsplit=1)
-        folder = folder.split(".")[0]
-        if folder == Path(test_folder).name:
-            curr_time_diff = abs(image_timestamp - timestamp)
-            if curr_time_diff < min_time_diff:
-                min_time_diff = curr_time_diff
-                local_transform = create_transform(timestamp_trajectory_map[timestamp])
-                global_transform = create_transform(trajectory) @ np.linalg.inv(local_transform) # make global_transform local -> global
-
-    groundtruth_global = (global_transform @ groundtruth_local.T).T
-
-    print("groundtruth, global transform")
-    print(groundtruth_global[:3], global_transform)
-
-    image = np.asarray(Image.open(img_path))
-    q, t = localize_image(image, groundtruth_global[:3])
-    print("prediction: ", q, t)
+if __name__ == '__main__':
+    main()
