@@ -228,65 +228,89 @@ class HLoc:
         return results.get(image_name, {})
 
 
-def main():
-    test_folder = "./datasets/lamar-hg/hl_2020-12-13-10-20-30-996"
-    img_paths = np.array(glob.glob(os.path.join(test_folder, "processed_data/images/*.jpg")))
-    np.random.shuffle(img_paths)
-    img_paths = img_paths[:3]
+# def main():
+#     test_folder = "./datasets/lamar-hg/hl_2020-12-13-10-20-30-996"
+#     img_paths = np.array(glob.glob(os.path.join(test_folder, "processed_data/images/*.jpg")))
+#     np.random.shuffle(img_paths)
+#     img_paths = img_paths[:3]
     
-    hloc = HLoc()
+#     hloc = HLoc()
+
+#     global_timestamp_trajectory_map = create_timestamp_trajectory_map("./datasets/HGE/sessions/map/trajectories.txt") | create_timestamp_trajectory_map("./datasets/HGE/sessions/query_val_hololens/proc/alignment_trajectories.txt")
+#     global_xyz = np.array([[trajectory['tx'], trajectory['ty'], trajectory['tz']] for trajectory in global_timestamp_trajectory_map.values()])
+
+#     for img_path in img_paths:
+
+#         image_timestamp_map = create_image_timestamp_map(glob.glob(f"{test_folder}/**/images.txt", recursive=True)[0])
+#         timestamp_trajectory_map = create_timestamp_trajectory_map(glob.glob(f"{test_folder}/**/trajectories.txt", recursive=True)[0])
+#         image_name = os.path.join("hetlf", Path(img_path).name)
+#         image_timestamp = image_timestamp_map[image_name]["timestamp"]
+#         groundtruth_trajectory = timestamp_trajectory_map[image_timestamp]
+#         groundtruth_local = np.array([groundtruth_trajectory["tx"], groundtruth_trajectory["ty"], groundtruth_trajectory["tz"], 1])
+
+#         global_timestamp_trajectory_map = create_timestamp_trajectory_map("./datasets/HGE/sessions/map/trajectories.txt") | create_timestamp_trajectory_map("./datasets/HGE/sessions/query_val_hololens/proc/alignment_trajectories.txt")
+#         global_transform = None
+#         min_time_diff = float('inf')
+#         for timestamp, trajectory in global_timestamp_trajectory_map.items():
+#             folder, device_id = trajectory["device_id"].split("/", maxsplit=1)
+#             folder = folder.split(".")[0]
+#             if folder == Path(test_folder).name:
+#                 curr_time_diff = abs(image_timestamp - timestamp)
+#                 if curr_time_diff < min_time_diff:
+#                     min_time_diff = curr_time_diff
+#                     local_transform = create_transform(timestamp_trajectory_map[timestamp])
+#                     global_transform = create_transform(trajectory) @ np.linalg.inv(local_transform) # make global_transform local -> global
+
+#         groundtruth = (global_transform @ groundtruth_local.T).T[:3]
+
+#         image = np.asarray(Image.open(img_path))
+
+#         results = hloc.localize_image(image)
+
+#         visualization.visualize_loc(QUERY_RESULT, DATASET, QUERY_IMAGE_DIR, n=1, top_k_db=3, seed=2)
+
+#         points_3d = results["3d_points"]
+#         tvec = results["t"]
+
+#         print("groundtruth: ", groundtruth)
+#         print("predicted: ", tvec)
+#         print("dist: ", np.linalg.norm(groundtruth - tvec))
+#         print("projected dist: ", np.linalg.norm((groundtruth - tvec)[:2]))
+
+#         fig = plt.figure(figsize=(12, 12))
+#         ax = fig.add_subplot(projection='3d')
+
+#         # ax.plot(coorx, coory, coorz, markersize = 1, marker = 'o', alpha = 1, c = 'white', zorder = 0, linestyle = '', alpha = 1)
+#         # ax.scatter([groundtruth[0]], [groundtruth[1]], [groundtruth[2]], c = 'red', zorder=4)
+#         ax.scatter([tvec[0]], [tvec[1]], [tvec[2]], c = 'green', zorder=3)
+#         # ax.scatter(points_3d[:,0],points_3d[:,1],points_3d[:,2], c = 'orange', zorder=2, alpha=0.01) # these alpha values are necessary since scatter doesn't respect z-order
+#         ax.scatter(global_xyz[:,0], global_xyz[:,1], global_xyz[:,2], c = 'blue', zorder=1, alpha=0.01)
+        
+#         plt.show()
+
+def main():
+    hloc = HLoc(40)
 
     global_timestamp_trajectory_map = create_timestamp_trajectory_map("./datasets/HGE/sessions/map/trajectories.txt") | create_timestamp_trajectory_map("./datasets/HGE/sessions/query_val_hololens/proc/alignment_trajectories.txt")
     global_xyz = np.array([[trajectory['tx'], trajectory['ty'], trajectory['tz']] for trajectory in global_timestamp_trajectory_map.values()])
 
-    for img_path in img_paths:
+    img_path = "./test.jpg"
+    image = np.asarray(Image.open(img_path))
 
-        image_timestamp_map = create_image_timestamp_map(glob.glob(f"{test_folder}/**/images.txt", recursive=True)[0])
-        timestamp_trajectory_map = create_timestamp_trajectory_map(glob.glob(f"{test_folder}/**/trajectories.txt", recursive=True)[0])
-        image_name = os.path.join("hetlf", Path(img_path).name)
-        image_timestamp = image_timestamp_map[image_name]["timestamp"]
-        groundtruth_trajectory = timestamp_trajectory_map[image_timestamp]
-        groundtruth_local = np.array([groundtruth_trajectory["tx"], groundtruth_trajectory["ty"], groundtruth_trajectory["tz"], 1])
+    results = hloc.localize_image(image)
 
-        global_timestamp_trajectory_map = create_timestamp_trajectory_map("./datasets/HGE/sessions/map/trajectories.txt") | create_timestamp_trajectory_map("./datasets/HGE/sessions/query_val_hololens/proc/alignment_trajectories.txt")
-        global_transform = None
-        min_time_diff = float('inf')
-        for timestamp, trajectory in global_timestamp_trajectory_map.items():
-            folder, device_id = trajectory["device_id"].split("/", maxsplit=1)
-            folder = folder.split(".")[0]
-            if folder == Path(test_folder).name:
-                curr_time_diff = abs(image_timestamp - timestamp)
-                if curr_time_diff < min_time_diff:
-                    min_time_diff = curr_time_diff
-                    local_transform = create_transform(timestamp_trajectory_map[timestamp])
-                    global_transform = create_transform(trajectory) @ np.linalg.inv(local_transform) # make global_transform local -> global
+    visualization.visualize_loc(QUERY_RESULT, DATASET, QUERY_IMAGE_DIR, n=1, top_k_db=3, seed=2)
 
-        groundtruth = (global_transform @ groundtruth_local.T).T[:3]
+    tvec = results["t"]
 
-        image = np.asarray(Image.open(img_path))
+    fig = plt.figure(figsize=(12, 12))
+    ax = fig.add_subplot(projection='3d')
+    ax.scatter([tvec[0]], [tvec[1]], [tvec[2]], c = 'green', zorder=3)
+    ax.scatter(global_xyz[:,0], global_xyz[:,1], global_xyz[:,2], c = 'blue', zorder=1, alpha=0.01)
 
-        results = hloc.localize_image(image)
-
-        visualization.visualize_loc(QUERY_RESULT, DATASET, QUERY_IMAGE_DIR, n=1, top_k_db=3, seed=2)
-
-        points_3d = results["3d_points"]
-        tvec = results["t"]
-
-        print("groundtruth: ", groundtruth)
-        print("predicted: ", tvec)
-        print("dist: ", np.linalg.norm(groundtruth - tvec))
-        print("projected dist: ", np.linalg.norm((groundtruth - tvec)[:2]))
-
-        fig = plt.figure(figsize=(12, 12))
-        ax = fig.add_subplot(projection='3d')
-
-        # ax.plot(coorx, coory, coorz, markersize = 1, marker = 'o', alpha = 1, c = 'white', zorder = 0, linestyle = '', alpha = 1)
-        ax.scatter([groundtruth[0]], [groundtruth[1]], [groundtruth[2]], c = 'red', zorder=4)
-        ax.scatter([tvec[0]], [tvec[1]], [tvec[2]], c = 'green', zorder=3)
-        ax.scatter(points_3d[:,0],points_3d[:,1],points_3d[:,2], c = 'orange', zorder=2, alpha=0.01) # these alpha values are necessary since scatter doesn't respect z-order
-        ax.scatter(global_xyz[:,0], global_xyz[:,1], global_xyz[:,2], c = 'blue', zorder=1, alpha=0.01)
-        
-        plt.show()
+    print(tvec)
+    
+    plt.show()
 
 
 if __name__ == '__main__':

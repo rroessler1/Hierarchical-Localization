@@ -275,6 +275,7 @@ def main(dataset_dir, q_dir, retrieval, q_features, features, matches, results, 
         
 
     for folder in r_folders:
+        print(folder)
         image_timestamp_map = create_image_timestamp_map(glob.glob(f"{os.path.join(dataset_dir, folder)}/**/images.txt", recursive=True)[0])
         timestamp_trajectory_map = create_timestamp_trajectory_map(glob.glob(f"{os.path.join(dataset_dir, folder)}/**/trajectories.txt", recursive=True)[0])
         
@@ -314,8 +315,6 @@ def main(dataset_dir, q_dir, retrieval, q_features, features, matches, results, 
                 dataset_dir, q_dir, q, q_feature_file, db, feature_file, match_file, capture_data_dict, skip_matches
             )
 
-            print(ret)
-
             camera_transform =  ret["cam_from_world"].inverse()
             qvec = camera_transform.rotation.quat
             tvec = camera_transform.translation
@@ -333,7 +332,6 @@ def main(dataset_dir, q_dir, retrieval, q_features, features, matches, results, 
             result_dict[q] = {
                 "t": tvec,
                 "q": qvec,
-                "3d_points": mkp3d
             }
 
             i += 1
