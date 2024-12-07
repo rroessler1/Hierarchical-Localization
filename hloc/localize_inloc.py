@@ -275,7 +275,6 @@ def main(dataset_dir, q_dir, retrieval, q_features, features, matches, results, 
         
 
     for folder in r_folders:
-        print(folder)
         image_timestamp_map = create_image_timestamp_map(glob.glob(f"{os.path.join(dataset_dir, folder)}/**/images.txt", recursive=True)[0])
         timestamp_trajectory_map = create_timestamp_trajectory_map(glob.glob(f"{os.path.join(dataset_dir, folder)}/**/trajectories.txt", recursive=True)[0])
         
