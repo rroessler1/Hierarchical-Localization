@@ -22,8 +22,8 @@ def create_timestamp_trajectory_map(path_to_trajectory_file):
     df = df.set_index(['timestamp'])
     return df.to_dict('index')
 
-def get_depths(path_to_depths_txt_file):
-    df = pd.read_csv(path_to_depths_txt_file, delimiter=',', names=['timestamp', 'label', 'image_name'], skipinitialspace=True)
+def get_depths(path_to_depths_txt_file, skiprows=0):
+    df = pd.read_csv(path_to_depths_txt_file, delimiter=',', names=['timestamp', 'label', 'image_name'], skipinitialspace=True, skiprows=skiprows)
     df['image_name'] = df['image_name'].apply(lambda x: os.path.basename(x))
     return df['image_name'].to_numpy()
 

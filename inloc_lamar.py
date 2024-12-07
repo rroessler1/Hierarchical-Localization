@@ -25,22 +25,22 @@ reference_sfm = outputs / "sfm_superpoint+superglue"  # the SfM model we will bu
 
 global_descriptors = extract_features.main(retrieval_conf, dataset, outputs)
 
-pairs_from_retrieval.main(
-    global_descriptors,
-    loc_pairs,
-    40,
-    query_prefix="ios-random",
-    db_prefix="hl"
-)
+# pairs_from_retrieval.main(
+#     global_descriptors,
+#     loc_pairs,
+#     40,
+#     query_prefix="ross_awesome",
+#     db_prefix="hl"
+# )
 
 feature_path = extract_features.main(feature_conf, dataset, outputs)
 
-match_path = match_features.main(
-    matcher_conf, loc_pairs, feature_conf["output"], outputs
-)
+# match_path = match_features.main(
+#     matcher_conf, loc_pairs, feature_conf["output"], outputs
+# )
 
-localize_inloc.main(
-    dataset, loc_pairs, feature_path, match_path, results, skip_matches=20
-)  # skip database images with too few matches
+# localize_inloc.main(
+#     dataset, loc_pairs, feature_path, match_path, results, skip_matches=20
+# )  # skip database images with too few matches
 
-visualization.visualize_loc(results, dataset, n=1, top_k_db=1, seed=2)
+# visualization.visualize_loc(results, dataset, n=6, top_k_db=3, seed=2)

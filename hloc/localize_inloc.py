@@ -10,6 +10,7 @@ import numpy as np
 import os
 import pycolmap
 import torch
+import traceback
 
 from gluefactory.utils import image
 from gluefactory.utils.image import ImagePreprocessor
@@ -26,7 +27,7 @@ from .image_timestamp_mapping import create_image_timestamp_map, create_timestam
 def create_transform(trajectory):
     rotation = R.from_quat([trajectory['qw'], trajectory['qx'], trajectory['qy'], trajectory['qz']], scalar_first=True).as_matrix()
     translation = np.array([trajectory['tx'], trajectory['ty'], trajectory['tz']])
-    
+
     transform = np.eye(4)
     transform[:3, :3] = rotation
     transform[:3, 3] = translation
@@ -160,10 +161,10 @@ def get_3d_points_matching_2d_points(mkp3d, mkpr, from_hl):
     valid_mask = np.logical_and(valid_mask, np.all(selected_points != 0, axis=1))
     return selected_points, valid_mask
 
-def pose_from_cluster(dataset_dir, query_dir, q, q_feature_file, retrieved, feature_file, match_file, capture_data_dict, skip=None):    
+def pose_from_cluster(dataset_dir, query_dir, q, q_feature_file, retrieved, feature_file, match_file, capture_data_dict, skip=None):
     height, width = cv2.imread(str(query_dir / q)).shape[:2]
-    # cx = 0.5 * width
-    # cy = 0.5 * height
+    cx = 0.5 * width
+    cy = 0.5 * height
     # TODO: These might be different in Magic Leap (These are for session hl_2020-12-13-10-20-30-996/hetlf)
     # cx = 235.031
     # cy = 288.286
@@ -204,7 +205,7 @@ def pose_from_cluster(dataset_dir, query_dir, q, q_feature_file, retrieved, feat
             # so then, this gets all the valid match points from q, and the corresponding match from r
             mkpq, mkpr = kpq[v], kpr[m[v]]
             num_matches += len(mkpq)
-            
+
             depth_file_path = os.path.join(dataset_dir, leading_folder_name, 'processed_data', 'depths', depth_filename)
 
             point_cloud = depthmap_img_to_points_3d(depth_file_path, capture_data.depth_lut, height, width)
@@ -228,8 +229,7 @@ def pose_from_cluster(dataset_dir, query_dir, q, q_feature_file, retrieved, feat
             all_mkp3d.append(mkp3d)
             all_indices.append(np.full(np.count_nonzero(valid), i))
         except Exception as e:
-            print("pose_from_cluster")
-            print(repr(e))
+            print(traceback.format_exc())
             continue
 
     all_mkpq = np.concatenate(all_mkpq, 0)
@@ -272,7 +272,7 @@ def main(dataset_dir, q_dir, retrieval, q_features, features, matches, results, 
             camera_to_rig = create_transform(rig_transform_map["hetlf"])
         else:
             camera_to_rig = np.eye(4)
-        
+
         depth_LUT = np.load(glob.glob(f"{os.path.join(dataset_dir, folder)}/**/depth_LUT.npy", recursive=True)[0])
         capture_data_dict[folder] = CaptureData(image_timestamp_map, timestamp_trajectory_map, depth_LUT, camera_to_rig)
 
@@ -290,11 +290,8 @@ def main(dataset_dir, q_dir, retrieval, q_features, features, matches, results, 
     }
     result_dict = {}
     logger.info("Starting localization...")
-    i = 0
     for q in tqdm(queries):
         db = retrieval_dict[q]
-        if i > 100:
-            break
         try:
             ret, mkpq, mkpr, mkp3d, indices, num_matches = pose_from_cluster(
                 dataset_dir, q_dir, q, q_feature_file, db, feature_file, match_file, capture_data_dict, skip_matches
@@ -318,8 +315,6 @@ def main(dataset_dir, q_dir, retrieval, q_features, features, matches, results, 
                 "t": tvec,
                 "q": qvec,
             }
-
-            i += 1
         except ValueError:
             continue
         except KeyError:

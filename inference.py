@@ -143,8 +143,8 @@ class Matcher:
         pairs = find_unique_new_pairs(pairs, None if self.overwrite else match_path)
         if len(pairs) == 0:
             logger.info("Skipping the matching.")
-            return
-        
+            return match_path
+
         dataset = FeaturePairsDataset(pairs, feature_path_q, feature_path_ref)
         loader = torch.utils.data.DataLoader(
             dataset, batch_size=1, shuffle=False, pin_memory=True
@@ -183,11 +183,11 @@ class HLoc:
         results: dict = self.localize_image_(image_path)
         # return results.get("q",None), results.get("t", None)
         return results # for debugging purposes
-    
+
     def localize_image_(self, image_path: Path):
 
         query_descriptors = self.retrieval_feature_extractor.extract_features(QUERY_IMAGE_DIR, QUERY_OUTPUT)
-        
+
         pairs_from_retrieval.main(
             query_descriptors,
             QUERY_PAIRS,
@@ -229,7 +229,7 @@ class HLoc:
 #     img_paths = np.array(glob.glob(os.path.join(test_folder, "processed_data/images/*.jpg")))
 #     np.random.shuffle(img_paths)
 #     img_paths = img_paths[:3]
-    
+
 #     hloc = HLoc(40)
 
 #     global_timestamp_trajectory_map = create_timestamp_trajectory_map("./datasets/HGE/sessions/map/trajectories.txt") | create_timestamp_trajectory_map("./datasets/HGE/sessions/query_val_hololens/proc/alignment_trajectories.txt")
@@ -279,7 +279,7 @@ class HLoc:
 #         # ax.scatter([groundtruth[0]], [groundtruth[1]], [groundtruth[2]], c = 'red', zorder=4)
 #         ax.scatter([tvec[0]], [tvec[1]], [tvec[2]], c = 'green', zorder=3)
 #         ax.scatter(global_xyz[:,0], global_xyz[:,1], global_xyz[:,2], c = 'blue', zorder=1, alpha=0.01)
-        
+
 #         plt.show()
 
 
@@ -300,11 +300,11 @@ def is_image_blurred(image_path, threshold=100):
     image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
     if image is None:
         raise ValueError("Could not load the image. Please check the file path.")
-    
+
     # Compute the Laplacian of the image and then calculate the variance
     laplacian = cv2.Laplacian(image, cv2.CV_64F)
     variance = laplacian.var()
-    
+
     # Return whether the image is considered blurry and the variance value
     return variance < threshold, variance
 
@@ -315,9 +315,9 @@ def main():
     global_timestamp_trajectory_map = create_timestamp_trajectory_map("./datasets/HGE/sessions/map/trajectories.txt") | create_timestamp_trajectory_map("./datasets/HGE/sessions/query_val_hololens/proc/alignment_trajectories.txt")
     global_xyz = np.array([[trajectory['tx'], trajectory['ty'], trajectory['tz']] for trajectory in global_timestamp_trajectory_map.values()])
 
-    # for img_path in glob.glob("./good_image*.jpg"):
-    # for img_path in glob.glob("datasets/ml2/4f118abe-b566-11ef-9c92-749779ecb898.jpg"):
-    for img_path in glob.glob("datasets/ml2/*.jpg"):
+    test_folder = "./datasets/ml2/"
+    img_paths = np.array(glob.glob(os.path.join(test_folder, "*.jpg")))
+    for img_path in img_paths:
         image = np.asarray(Image.open(img_path))
 
         results = hloc.localize_image(image)
@@ -339,7 +339,7 @@ def main():
             ax.scatter(global_xyz[:,0], global_xyz[:,1], global_xyz[:,2], c = 'blue', zorder=1, alpha=0.01)
 
             print(tvec)
-            
+
             plt.show()
         except:
             print(f"no results for: {img_path}")
