@@ -41,7 +41,7 @@ def process_session(session_dir):
 
     processed_data_path = os.path.join(session_dir, "processed_data")
     processed_image_path = os.path.join(processed_data_path, "images")
-    processed_depth_path = os.path.join(processed_data_path, "depth")
+    processed_depth_path = os.path.join(processed_data_path, "depths")
 
     for path in [processed_data_path, processed_image_path, processed_depth_path]:
         if not os.path.exists(path):
@@ -68,7 +68,7 @@ def process_session(session_dir):
         print(f"Copying {image_path} to {processed_image_path}")
         shutil.copy(depth_path, processed_depth_filename)
         print(f"Copying {depth_path} to {processed_depth_filename}")
-        
+
     return
 
 def main(args):
