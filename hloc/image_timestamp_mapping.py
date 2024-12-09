@@ -8,10 +8,8 @@ from numpy import ndarray
 class CaptureData:
     image_timestamp_map: pd.DataFrame
     timestamp_trajectory_map: pd.DataFrame
-    timestamp_transfrom_map: dict
-    depth_filenames: ndarray
-    depth_timestamps: ndarray
     depth_lut: any
+    camera_to_rig: ndarray
 
 def create_image_timestamp_map(path_to_image_file):
     df = pd.read_csv(path_to_image_file, delimiter=',', names=['timestamp', 'device_id', 'image_name'], skiprows=1, skipinitialspace=True)
@@ -28,6 +26,11 @@ def get_depths(path_to_depths_txt_file):
     df = pd.read_csv(path_to_depths_txt_file, delimiter=',', names=['timestamp', 'label', 'image_name'], skipinitialspace=True)
     df['image_name'] = df['image_name'].apply(lambda x: os.path.basename(x))
     return df['image_name'].to_numpy()
+
+def create_rig_transform_map(path_to_rig_file):
+    df = pd.read_csv(path_to_rig_file, delimiter=',', names=['device', 'sensor', 'qw', 'qx', 'qy', 'qz', 'tx', 'ty', 'tz'], skiprows=1, skipinitialspace=True)
+    df = df.set_index(['sensor'])
+    return df.to_dict('index')
 
 # This stuff was valid for lamar data
 # def create_image_timestamp_map(path_to_image_file):

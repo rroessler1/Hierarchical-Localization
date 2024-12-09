@@ -198,18 +198,14 @@ class HLoc:
 
         # TODO: only have features that have global alignment then this is unecessary
         # this removes all pairs found with sessions without global alignment
-        global_timestamp_trajectory_map = create_timestamp_trajectory_map("./datasets/HGE/sessions/map/trajectories.txt") | create_timestamp_trajectory_map("./datasets/HGE/sessions/query_val_hololens/proc/alignment_trajectories.txt")
-        global_aligment_sessions = set()
-        for trajectory in global_timestamp_trajectory_map.values():
-            folder = trajectory["device_id"].split(".")[0]
-            global_aligment_sessions.add(folder)
-
         with open(QUERY_PAIRS, "r") as f:
             lines = f.readlines()
         with open(QUERY_PAIRS, "w") as f:
             for line in lines:
                 session = line.split(' ')[-1].split('/')[0]
-                if session in global_aligment_sessions:
+                timestamp = int(Path(line.split(' ')[-1]).stem)
+                global_trajectory_file = os.path.join(DATASET, session, "global_trajectories.txt")
+                if os.path.exists(global_trajectory_file) and timestamp in create_timestamp_trajectory_map(global_trajectory_file):
                     f.write(line)
                 else:
                     print("deleted line: ", line)
@@ -234,7 +230,7 @@ class HLoc:
 #     np.random.shuffle(img_paths)
 #     img_paths = img_paths[:3]
     
-#     hloc = HLoc()
+#     hloc = HLoc(40)
 
 #     global_timestamp_trajectory_map = create_timestamp_trajectory_map("./datasets/HGE/sessions/map/trajectories.txt") | create_timestamp_trajectory_map("./datasets/HGE/sessions/query_val_hololens/proc/alignment_trajectories.txt")
 #     global_xyz = np.array([[trajectory['tx'], trajectory['ty'], trajectory['tz']] for trajectory in global_timestamp_trajectory_map.values()])
@@ -269,7 +265,6 @@ class HLoc:
 
 #         visualization.visualize_loc(QUERY_RESULT, DATASET, QUERY_IMAGE_DIR, n=1, top_k_db=3, seed=2)
 
-#         points_3d = results["3d_points"]
 #         tvec = results["t"]
 
 #         print("groundtruth: ", groundtruth)
@@ -283,10 +278,36 @@ class HLoc:
 #         # ax.plot(coorx, coory, coorz, markersize = 1, marker = 'o', alpha = 1, c = 'white', zorder = 0, linestyle = '', alpha = 1)
 #         # ax.scatter([groundtruth[0]], [groundtruth[1]], [groundtruth[2]], c = 'red', zorder=4)
 #         ax.scatter([tvec[0]], [tvec[1]], [tvec[2]], c = 'green', zorder=3)
-#         # ax.scatter(points_3d[:,0],points_3d[:,1],points_3d[:,2], c = 'orange', zorder=2, alpha=0.01) # these alpha values are necessary since scatter doesn't respect z-order
 #         ax.scatter(global_xyz[:,0], global_xyz[:,1], global_xyz[:,2], c = 'blue', zorder=1, alpha=0.01)
         
 #         plt.show()
+
+
+import cv2
+def is_image_blurred(image_path, threshold=100):
+    """
+    Check if an image has motion blur using the Laplacian variance method.
+
+    Parameters:
+        image_path (str): Path to the image file.
+        threshold (float): Variance threshold to classify as blurry.
+
+    Returns:
+        bool: True if the image is blurred, False otherwise.
+        float: The calculated variance of the Laplacian.
+    """
+    # Load the image in grayscale
+    image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+    if image is None:
+        raise ValueError("Could not load the image. Please check the file path.")
+    
+    # Compute the Laplacian of the image and then calculate the variance
+    laplacian = cv2.Laplacian(image, cv2.CV_64F)
+    variance = laplacian.var()
+    
+    # Return whether the image is considered blurry and the variance value
+    return variance < threshold, variance
+
 
 def main():
     hloc = HLoc(40)
@@ -294,23 +315,34 @@ def main():
     global_timestamp_trajectory_map = create_timestamp_trajectory_map("./datasets/HGE/sessions/map/trajectories.txt") | create_timestamp_trajectory_map("./datasets/HGE/sessions/query_val_hololens/proc/alignment_trajectories.txt")
     global_xyz = np.array([[trajectory['tx'], trajectory['ty'], trajectory['tz']] for trajectory in global_timestamp_trajectory_map.values()])
 
-    img_path = "./test.jpg"
-    image = np.asarray(Image.open(img_path))
+    # for img_path in glob.glob("./good_image*.jpg"):
+    # for img_path in glob.glob("datasets/ml2/4f118abe-b566-11ef-9c92-749779ecb898.jpg"):
+    for img_path in glob.glob("datasets/ml2/*.jpg"):
+        image = np.asarray(Image.open(img_path))
 
-    results = hloc.localize_image(image)
+        results = hloc.localize_image(image)
 
-    visualization.visualize_loc(QUERY_RESULT, DATASET, QUERY_IMAGE_DIR, n=1, top_k_db=3, seed=2)
+        visualization.visualize_loc(QUERY_RESULT, DATASET, QUERY_IMAGE_DIR, n=1, top_k_db=3, seed=2)
 
-    tvec = results["t"]
+        try:
+            tvec = results["t"]
 
-    fig = plt.figure(figsize=(12, 12))
-    ax = fig.add_subplot(projection='3d')
-    ax.scatter([tvec[0]], [tvec[1]], [tvec[2]], c = 'green', zorder=3)
-    ax.scatter(global_xyz[:,0], global_xyz[:,1], global_xyz[:,2], c = 'blue', zorder=1, alpha=0.01)
+            # plt.figure(figsize=(12, 12))
+            # plt.scatter(tvec[0], tvec[1], c = 'green', zorder=3)
+            # plt.scatter(global_xyz[:,0], global_xyz[:,1], c = 'blue', zorder=1, alpha=0.01)
 
-    print(tvec)
-    
-    plt.show()
+            print(img_path)
+            print("blur:", is_image_blurred(img_path))
+            fig = plt.figure(figsize=(12, 12))
+            ax = fig.add_subplot(projection='3d')
+            ax.scatter([tvec[0]], [tvec[1]], [tvec[2]], c = 'green', zorder=3)
+            ax.scatter(global_xyz[:,0], global_xyz[:,1], global_xyz[:,2], c = 'blue', zorder=1, alpha=0.01)
+
+            print(tvec)
+            
+            plt.show()
+        except:
+            print(f"no results for: {img_path}")
 
 
 if __name__ == '__main__':

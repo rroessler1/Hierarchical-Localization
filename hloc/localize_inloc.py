@@ -20,7 +20,7 @@ from tqdm import tqdm
 
 from . import logger
 from .utils.parsers import names_to_pair, parse_retrieval
-from .image_timestamp_mapping import create_image_timestamp_map, create_timestamp_trajectory_map, get_depths, CaptureData
+from .image_timestamp_mapping import create_image_timestamp_map, create_timestamp_trajectory_map, create_rig_transform_map, CaptureData
 
 
 def create_transform(trajectory):
@@ -111,7 +111,7 @@ def depth_to_point_cloud(depth_image, fx, fy, cx, cy):
     # valid_points = points[~np.isnan(Z.flatten()) & (Z.flatten() > 0)]
     # return valid_points
 
-def depthmap_img_to_points_3d(depthmap_path, lut):
+def depthmap_img_to_points_3d(depthmap_path, lut, new_H, new_W):
     depthmap = np.array(
       cv2.imread(str(depthmap_path), cv2.IMREAD_ANYDEPTH),
       dtype=float
@@ -130,7 +130,6 @@ def depthmap_img_to_points_3d(depthmap_path, lut):
     )
     points_3d = points_3d.reshape((*depthmap.shape, 3))
 
-    new_H, new_W = 432, 480
     # Compute zoom factors for each dimension
     zoom_factors = (new_H / points_3d.shape[0], new_W / points_3d.shape[1], 1)  # Keep 3rd dimension (2 channels) unchanged
     # Apply zoom with bilinear interpolation
@@ -144,14 +143,14 @@ def load_and_rescale_depth_image(file_path):
     new_depth_image = depth_process(depth_image)['image']
     return new_depth_image[0, :, :].numpy()
 
-def get_3d_points_matching_2d_points(mkp3d, mkpr):
+def get_3d_points_matching_2d_points(mkp3d, mkpr, from_hl):
     h, w, c = mkp3d.shape
     cols = mkpr[:, 0].astype(int)
     rows = mkpr[:, 1].astype(int)
 
     # Check bounds
-    vertical_offset = 140
-    horiz_offset = 20
+    vertical_offset = 140 if from_hl else 0
+    horiz_offset = 20 if from_hl else 0
     valid_mask = (rows >= 0 + vertical_offset) & (rows < h + vertical_offset) & (cols >= 0 + horiz_offset) & (cols < w + horiz_offset)
     rows[~valid_mask] = vertical_offset
     cols[~valid_mask] = horiz_offset
@@ -166,8 +165,13 @@ def pose_from_cluster(dataset_dir, query_dir, q, q_feature_file, retrieved, feat
     # cx = 0.5 * width
     # cy = 0.5 * height
     # TODO: These might be different in Magic Leap (These are for session hl_2020-12-13-10-20-30-996/hetlf)
-    cx = 235.031
-    cy = 288.286
+    # cx = 235.031
+    # cy = 288.286
+    # fx = 363.32
+    # fy = 360.299
+
+    cx = 320
+    cy = 240
     fx = 363.32
     fy = 360.299
 
@@ -182,16 +186,12 @@ def pose_from_cluster(dataset_dir, query_dir, q, q_feature_file, retrieved, feat
         file_name = os.path.basename(r)
         # folder_and_file_name = os.path.join(os.path.basename(os.path.dirname(r)), file_name)
         # FIXME: right now we're only using the hetlf, so this is ok, but it's kinda a hack
-        folder_and_file_name = os.path.join("hetlf", file_name)
         leading_folder_name = Path(r).parts[0]
         capture_data: CaptureData = capture_data_dict[leading_folder_name]
         file_timestamp = int(file_name.split('.')[0])
-        idx = np.searchsorted(capture_data.depth_timestamps, file_timestamp)
-        if idx == len(capture_data.depth_timestamps) or (idx > 0 and file_timestamp - capture_data.depth_timestamps[idx-1] < capture_data.depth_timestamps[idx] - file_timestamp):
-            idx -= 1
-        depth_filename = capture_data.depth_filenames[idx]
+        depth_filename = f"{file_timestamp}.png"
         try:
-            trajectory = capture_data.timestamp_trajectory_map[capture_data.image_timestamp_map[folder_and_file_name]['timestamp']]
+            trajectory = capture_data.timestamp_trajectory_map[file_timestamp]
             kpr = feature_file[r]["keypoints"].__array__()
             pair = names_to_pair(q, r)
             # m is an array of indices for which point from r matches to q
@@ -204,29 +204,28 @@ def pose_from_cluster(dataset_dir, query_dir, q, q_feature_file, retrieved, feat
             # so then, this gets all the valid match points from q, and the corresponding match from r
             mkpq, mkpr = kpq[v], kpr[m[v]]
             num_matches += len(mkpq)
-            depth_file_paths = glob.glob(f"{os.path.join(dataset_dir, leading_folder_name, 'processed_data')}/**/{depth_filename}", recursive=True)
-            if len(depth_file_paths) > 1:
-                print(f"Found multiple depth files [{depth_filename}] in path [{os.path.join(dataset_dir, leading_folder_name)}]")
-            depth_file_path = depth_file_paths[0]
-            point_cloud = depthmap_img_to_points_3d(depth_file_path, capture_data.depth_lut)
-            mkp3d, valid = get_3d_points_matching_2d_points(point_cloud, mkpr)
-            # mkp3d = point_cloud # , valid = interpolate_scan(point_cloud, mkpr)
-            # valid = [True] * mkpr.shape[0]
-
-            transform_timestamps = list(capture_data.timestamp_transfrom_map.keys())
-            transform_idx = np.searchsorted(transform_timestamps, file_timestamp)
-            if transform_idx == len(transform_timestamps) or (transform_idx > 0 and file_timestamp - transform_timestamps[transform_idx-1] < transform_timestamps[transform_idx] - file_timestamp):
-                transform_idx -= 1
             
-            local_transform = create_transform(trajectory)
-            global_transform = capture_data.timestamp_transfrom_map[transform_timestamps[transform_idx]]
+            depth_file_path = os.path.join(dataset_dir, leading_folder_name, 'processed_data', 'depths', depth_filename)
+
+            point_cloud = depthmap_img_to_points_3d(depth_file_path, capture_data.depth_lut, height, width)
+            file_from_hololens = leading_folder_name[:2] == "hl"
+            mkp3d, valid = get_3d_points_matching_2d_points(point_cloud, mkpr, file_from_hololens)
+
+            # if skip and (np.sum(valid) < skip):
+            #     continue
+
+            mkpq = mkpq[valid]
+            mkpr = mkpr[valid]
+            mkp3d = mkp3d[valid]
+
+            rig_to_global = create_transform(trajectory)
 
             mkp3d = np.hstack([mkp3d, np.ones((len(mkp3d),1))])
-            mkp3d = (global_transform @ local_transform @ mkp3d.T).T[:,:3]
+            mkp3d = (rig_to_global @ capture_data.camera_to_rig @ mkp3d.T).T[:,:3]
 
-            all_mkpq.append(mkpq[valid])
-            all_mkpr.append(mkpr[valid])
-            all_mkp3d.append(mkp3d[valid])
+            all_mkpq.append(mkpq)
+            all_mkpr.append(mkpr)
+            all_mkp3d.append(mkp3d)
             all_indices.append(np.full(np.count_nonzero(valid), i))
         except Exception as e:
             print("pose_from_cluster")
@@ -246,7 +245,7 @@ def pose_from_cluster(dataset_dir, query_dir, q, q_feature_file, retrieved, feat
     }
 
     # ret = pycolmap.absolute_pose_estimation(all_mkpq.astype(np.float64), all_mkp3d, pycolmap.Camera(**cfg), 48.00)
-    ret = pycolmap.absolute_pose_estimation(all_mkpq, all_mkp3d, cfg, estimation_options={'ransac': {'max_error': 48.0}})
+    ret = pycolmap.absolute_pose_estimation(all_mkpq, all_mkp3d, cfg, estimation_options={'ransac': {'max_error': 24.0}})
     ret["cfg"] = cfg
     return ret, all_mkpq, all_mkpr, all_mkp3d, all_indices, num_matches
 
@@ -263,33 +262,20 @@ def main(dataset_dir, q_dir, retrieval, q_features, features, matches, results, 
     r_folders = list(set([Path(r).parts[0] for r in r_paths]))
     capture_data_dict = {}
 
-    global_timestamp_trajectory_map = create_timestamp_trajectory_map("./datasets/HGE/sessions/map/trajectories.txt") | create_timestamp_trajectory_map("./datasets/HGE/sessions/query_val_hololens/proc/alignment_trajectories.txt")
-    global_transform_map = {}
-    for timestamp, trajectory in global_timestamp_trajectory_map.items():
-        folder, device_id = trajectory["device_id"].split("/", maxsplit=1)
-        folder = folder.split(".")[0]
-        trajectory["device_id"] = device_id
-        if folder not in global_transform_map:
-            global_transform_map[folder] = {}
-        global_transform_map[folder][timestamp] = create_transform(trajectory)
-        
-
     for folder in r_folders:
         image_timestamp_map = create_image_timestamp_map(glob.glob(f"{os.path.join(dataset_dir, folder)}/**/images.txt", recursive=True)[0])
-        timestamp_trajectory_map = create_timestamp_trajectory_map(glob.glob(f"{os.path.join(dataset_dir, folder)}/**/trajectories.txt", recursive=True)[0])
-        
-        if folder in global_transform_map:
-            for timestamp in global_transform_map[folder].keys():
-                local_trajectory = timestamp_trajectory_map[timestamp]
-                local_transform = create_transform(local_trajectory)
-                global_transform_map[folder][timestamp] @= np.linalg.inv(local_transform)
-            
-            depth_files = get_depths(glob.glob(f"{os.path.join(dataset_dir, folder)}/**/depths.txt", recursive=True)[0])
-            depth_timestamps = np.array([int(filename.split('.')[0]) for filename in depth_files], dtype=np.int64)
-            depth_LUT = np.load(glob.glob(f"{os.path.join(dataset_dir, folder)}/**/depth_LUT.npy", recursive=True)[0])
-            capture_data_dict[folder] = CaptureData(image_timestamp_map, timestamp_trajectory_map, global_transform_map[folder], depth_files, depth_timestamps, depth_LUT)
+        timestamp_trajectory_map = create_timestamp_trajectory_map(glob.glob(f"{os.path.join(dataset_dir, folder)}/**/global_trajectories.txt", recursive=True)[0])
+
+        rig_file = f"{os.path.join(dataset_dir, folder)}/rigs.txt"
+        if os.path.exists(rig_file):
+            rig_transform_map = create_rig_transform_map(rig_file)
+            camera_to_rig = create_transform(rig_transform_map["hetlf"])
         else:
-            print("session folder doesn't have global coordinates ", folder)
+            camera_to_rig = np.eye(4)
+        
+        depth_LUT = np.load(glob.glob(f"{os.path.join(dataset_dir, folder)}/**/depth_LUT.npy", recursive=True)[0])
+        capture_data_dict[folder] = CaptureData(image_timestamp_map, timestamp_trajectory_map, depth_LUT, camera_to_rig)
+
 
     feature_file = h5py.File(features, "r", libver="latest")
     q_feature_file = h5py.File(q_features, "r", libver="latest")
