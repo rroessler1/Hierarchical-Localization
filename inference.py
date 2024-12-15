@@ -144,8 +144,8 @@ class Matcher:
         pairs = find_unique_new_pairs(pairs, None if self.overwrite else match_path)
         if len(pairs) == 0:
             logger.info("Skipping the matching.")
-            return
-        
+            return match_path
+
         dataset = FeaturePairsDataset(pairs, feature_path_q, feature_path_ref)
         loader = torch.utils.data.DataLoader(
             dataset, batch_size=1, shuffle=False, pin_memory=True
@@ -184,11 +184,11 @@ class HLoc:
         results: dict = self.localize_image_(image_path)
         # return results.get("q",None), results.get("t", None)
         return results # for debugging purposes
-    
+
     def localize_image_(self, image_path: Path):
 
         query_descriptors = self.retrieval_feature_extractor.extract_features(QUERY_IMAGE_DIR, QUERY_OUTPUT)
-        
+
         pairs_from_retrieval.main(
             query_descriptors,
             QUERY_PAIRS,
@@ -243,7 +243,7 @@ def get_inliers_per_match(loc):
 #     img_paths = np.array(glob.glob(os.path.join(test_folder, "processed_data/images/*.jpg")))
 #     np.random.shuffle(img_paths)
 #     img_paths = img_paths[:3]
-    
+
 #     hloc = HLoc(40)
 
 #     global_timestamp_trajectory_map = create_timestamp_trajectory_map("./datasets/HGE/sessions/map/trajectories.txt") | create_timestamp_trajectory_map("./datasets/HGE/sessions/query_val_hololens/proc/alignment_trajectories.txt")
@@ -293,7 +293,7 @@ def get_inliers_per_match(loc):
 #         # ax.scatter([groundtruth[0]], [groundtruth[1]], [groundtruth[2]], c = 'red', zorder=4)
 #         ax.scatter([tvec[0]], [tvec[1]], [tvec[2]], c = 'green', zorder=3)
 #         ax.scatter(global_xyz[:,0], global_xyz[:,1], global_xyz[:,2], c = 'blue', zorder=1, alpha=0.01)
-        
+
 #         plt.show()
 
 
@@ -314,11 +314,11 @@ def is_image_blurred(image_path, threshold=100):
     image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
     if image is None:
         raise ValueError("Could not load the image. Please check the file path.")
-    
+
     # Compute the Laplacian of the image and then calculate the variance
     laplacian = cv2.Laplacian(image, cv2.CV_64F)
     variance = laplacian.var()
-    
+
     # Return whether the image is considered blurry and the variance value
     return variance < threshold, variance
 
@@ -338,6 +338,7 @@ def main():
 
     translation = []
     rejected = []
+    all_trans = []
     
     for img_path in np.random.permutation(glob.glob(f"{session}/**/*.jpg")):
         timestamp = int(Path(img_path).stem)
@@ -365,6 +366,7 @@ def main():
             print(R.from_matrix(local_to_global[:3,:3]).as_quat(scalar_first=False))
             print(t, deg)
 
+            all_trans.append(t[[0,2,1]])
             if heuristic(get_inliers_per_match(results)):
                 translation.append(t[[0,2,1]])
             else:
@@ -380,12 +382,15 @@ def main():
 
     translation = np.array(translation)
     rejected = np.array(rejected)
+    all_trans = np.array(all_trans)
 
     fig = plt.figure(figsize=(12, 12))
     ax = fig.add_subplot(projection='3d')
     ax.scatter(translation[:,0], translation[:,1], translation[:,2], c = 'green', zorder=3)
     ax.scatter(rejected[:,0], rejected[:,1], rejected[:,2], c = 'red', zorder=3)
     ax.scatter(global_xyz[:,0], global_xyz[:,1], global_xyz[:,2], c = 'blue', zorder=1, alpha=0.01)
+    ax.scatter([translation[:,0].mean()], [translation[:,1].mean()], [translation[:,2].mean()], c = 'yellow', zorder=3)
+    ax.scatter([all_trans[:,0].mean()], [all_trans[:,1].mean()], [all_trans[:,2].mean()], c = 'orange', zorder=3)
     plt.show()
 
 if __name__ == '__main__':

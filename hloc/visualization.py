@@ -139,7 +139,7 @@ def visualize_loc_from_log(
 
     # display the database images with the most inlier matches
     db_sort = np.argsort(-counts)
-    for db_idx in db_sort[:top_k_db]:
+    for i, db_idx in enumerate(db_sort[:top_k_db]):
         if reconstruction is not None:
             db = reconstruction.images[loc["db"][db_idx]]
             db_name = db.name
@@ -155,7 +155,7 @@ def visualize_loc_from_log(
 
         db_image = read_image((db_image_dir or image_dir) / db_name)
         color = cm_RdGn(inliers_db).tolist()
-        text = f"inliers: {sum(inliers_db)}/{len(inliers_db)}"
+        text = f"Match {i}: inliers: {sum(inliers_db)}/{len(inliers_db)}"
 
         plot_images([q_image, db_image], dpi=dpi)
         plot_matches(kp_q, kp_db, color, a=0.1)

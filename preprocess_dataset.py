@@ -57,7 +57,7 @@ def process_session(session_dir):
     return
 
 def main(args):
-    session_paths = [f.path for f in os.scandir(args["dataset"]) if f.is_dir()]
+    session_paths = [f.path for f in os.scandir(args["dataset"]) if (f.is_dir() and "hl_" in f.path)]
     for session_dir in session_paths:
         print(f"processing {session_dir}")
         process_session(session_dir)
