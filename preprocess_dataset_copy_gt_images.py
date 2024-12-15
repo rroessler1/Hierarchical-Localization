@@ -31,6 +31,9 @@ def create_gt_file(dataset_dir: str, gt_file_path: str) -> dict[str, dict[str, f
 
 def get_gt_image_timestamps(gt_file_path):
     df = pd.read_csv(gt_file_path, delimiter=',', names=['timestamp', 'device_id', 'qw', 'qx', 'qy', 'qz', 'tx', 'ty', 'tz'], skiprows=1, skipinitialspace=True)
+    df = df[(df['tz'] > 0.9)]
+    df = df[(df['ty'] > -50) & (df['ty'] < 20)]
+    df = df[(df['tx'] > -10) & (df['tx'] < 65)]
     return natsorted(df['timestamp'])
 
 def process_session(session_dir):
@@ -72,11 +75,11 @@ def process_session(session_dir):
         idx = np.searchsorted(depth_timestamps, t)
         if idx == len(depth_timestamps) or (idx > 0 and t - depth_timestamps[idx-1] < depth_timestamps[idx] - t):
             idx -= 1
-        depth_path = os.path.join(session_dir, "raw_data", "depths", depth_files[idx])
+        depth_path = os.path.join(session_dir, "raw_data", "depth" if is_ios else "depths", depth_files[idx])
 
-        # shutil.copy(image_path, processed_image_path)
+        shutil.copy(image_path, processed_image_path)
         print(f"Copying {image_path} to {processed_image_path}")
-        # shutil.copy(depth_path, processed_depth_filename)
+        shutil.copy(depth_path, processed_depth_filename)
         print(f"Copying {depth_path} to {processed_depth_filename}")
 
     return

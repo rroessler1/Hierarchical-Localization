@@ -112,6 +112,31 @@ def depth_to_point_cloud(depth_image, fx, fy, cx, cy):
     # valid_points = points[~np.isnan(Z.flatten()) & (Z.flatten() > 0)]
     # return valid_points
 
+def create_normalized_lut(width, height):
+    """
+    Create a W x H x 2 NumPy array where each (i, j) entry contains the
+    normalized coordinates of the image pixel (x, y) in the range [-1, 1].
+
+    Args:
+        width (int): The width of the image.
+        height (int): The height of the image.
+
+    Returns:
+        np.ndarray: A (W x H x 2) array, where each pixel position
+                    holds its normalized coordinates [x_norm, y_norm].
+    """
+    # Create a grid of pixel indices for (x, y) coordinates
+    y_coords, x_coords = np.meshgrid(np.arange(height), np.arange(width), indexing='ij')
+
+    # Normalize x and y to the range [-1, 1]
+    x_norm = 2 * x_coords / (width - 1) - 1  # Normalize x to [-1, 1]
+    y_norm = 2 * y_coords / (height - 1) - 1  # Normalize y to [-1, 1]
+
+    # Stack the x and y coordinates along a new axis to get W x H x 2 array
+    normalized_coords = np.stack([x_norm, y_norm], axis=2)  # Shape (W, H, 2)
+
+    return normalized_coords
+
 def depthmap_img_to_points_3d(depthmap_path, lut, new_H, new_W):
     depthmap = np.array(
       cv2.imread(str(depthmap_path), cv2.IMREAD_ANYDEPTH),
@@ -120,6 +145,10 @@ def depthmap_img_to_points_3d(depthmap_path, lut, new_H, new_W):
     DEPTHMAP_SCALING_FACTOR = 1000  # mm to m
     depthmap /= DEPTHMAP_SCALING_FACTOR
     is_valid = np.logical_not(depthmap == -1)
+
+    # for iOS
+    if lut is None:
+        lut = create_normalized_lut(width=depthmap.shape[1], height=depthmap.shape[0])
 
     ## Backproject to 3D.
     num_valid_pixels = np.sum(is_valid)
@@ -163,18 +192,18 @@ def get_3d_points_matching_2d_points(mkp3d, mkpr, from_hl):
 
 def pose_from_cluster(dataset_dir, query_dir, q, q_feature_file, retrieved, feature_file, match_file, capture_data_dict, skip=None):
     height, width = cv2.imread(str(query_dir / q)).shape[:2]
-    cx = 0.5 * width
-    cy = 0.5 * height
+    # cx = 0.5 * width
+    # cy = 0.5 * height
     # TODO: These might be different in Magic Leap (These are for session hl_2020-12-13-10-20-30-996/hetlf)
     # cx = 235.031
     # cy = 288.286
-    # fx = 363.32
-    # fy = 360.299
+    fx = 100
+    fy = 100
 
     cx = 320
     cy = 240
-    fx = 363.32
-    fy = 360.299
+    # fx = 363.32
+    # fy = 360.299
 
     all_mkpq = []
     all_mkpr = []
@@ -211,9 +240,11 @@ def pose_from_cluster(dataset_dir, query_dir, q, q_feature_file, retrieved, feat
             point_cloud = depthmap_img_to_points_3d(depth_file_path, capture_data.depth_lut, height, width)
             file_from_hololens = leading_folder_name[:2] == "hl"
             mkp3d, valid = get_3d_points_matching_2d_points(point_cloud, mkpr, file_from_hololens)
+            if skip and (np.sum(valid) < skip):
+                # print(f"skipping {r}, Found {np.sum(valid)} valid points")
+                continue
+            # print(f"processing {r}, Found {np.sum(valid)} valid points")
 
-            # if skip and (np.sum(valid) < skip):
-            #     continue
 
             mkpq = mkpq[valid]
             mkpr = mkpr[valid]
@@ -232,6 +263,12 @@ def pose_from_cluster(dataset_dir, query_dir, q, q_feature_file, retrieved, feat
             print(traceback.format_exc())
             continue
 
+    NUM_IMAGES_TO_USE = 3
+    all_mkpq = sorted(all_mkpq, key=lambda x: x.shape[0], reverse=True)[:NUM_IMAGES_TO_USE]
+    all_mkpr = sorted(all_mkpr, key=lambda x: x.shape[0], reverse=True)[:NUM_IMAGES_TO_USE]
+    all_mkp3d = sorted(all_mkp3d, key=lambda x: x.shape[0], reverse=True)[:NUM_IMAGES_TO_USE]
+    all_indices = sorted(all_indices, key=lambda x: x.shape[0], reverse=True)[:NUM_IMAGES_TO_USE]
+
     all_mkpq = np.concatenate(all_mkpq, 0)
     all_mkpr = np.concatenate(all_mkpr, 0)
     all_mkp3d = np.concatenate(all_mkp3d, 0)
@@ -245,7 +282,7 @@ def pose_from_cluster(dataset_dir, query_dir, q, q_feature_file, retrieved, feat
     }
 
     # ret = pycolmap.absolute_pose_estimation(all_mkpq.astype(np.float64), all_mkp3d, pycolmap.Camera(**cfg), 48.00)
-    ret = pycolmap.absolute_pose_estimation(all_mkpq, all_mkp3d, cfg, estimation_options={'ransac': {'max_error': 24.0}})
+    ret = pycolmap.absolute_pose_estimation(all_mkpq, all_mkp3d, cfg, estimation_options={'ransac': {'max_error': 12.0}})
     ret["cfg"] = cfg
     return ret, all_mkpq, all_mkpr, all_mkp3d, all_indices, num_matches
 
@@ -273,7 +310,8 @@ def main(dataset_dir, q_dir, retrieval, q_features, features, matches, results, 
         else:
             camera_to_rig = np.eye(4)
 
-        depth_LUT = np.load(glob.glob(f"{os.path.join(dataset_dir, folder)}/**/depth_LUT.npy", recursive=True)[0])
+        depth_LUT_files = glob.glob(f"{os.path.join(dataset_dir, folder)}/**/depth_LUT.npy", recursive=True)
+        depth_LUT = np.load(depth_LUT_files[0]) if len(depth_LUT_files) > 0 else None
         capture_data_dict[folder] = CaptureData(image_timestamp_map, timestamp_trajectory_map, depth_LUT, camera_to_rig)
 
 
