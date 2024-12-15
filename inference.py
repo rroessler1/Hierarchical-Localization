@@ -8,6 +8,7 @@ import pprint
 from tqdm import tqdm
 import h5py
 from functools import partial
+from scipy.spatial.transform import Rotation as R
 
 from hloc import extract_features, match_features, localize_inloc, visualization, pairs_from_retrieval, extractors, logger, matchers
 from hloc.utils.io import list_h5_names
@@ -215,13 +216,26 @@ class HLoc:
 
         match_path = self.matcher.match(QUERY_PAIRS, QUERY_OUTPUT, FEATURE_CONF["output"], DB_FEATURE_PATH)
 
-        results = localize_inloc.main(
+        logs = localize_inloc.main(
             DATASET, QUERY_IMAGE_DIR, QUERY_PAIRS, query_features, DB_FEATURE_PATH, match_path, QUERY_RESULT, skip_matches=20
         )  # skip database images with too few matches
 
         image_name = image_path.relative_to(QUERY_IMAGE_DIR).as_posix()
 
-        return results.get(image_name, {})
+        return logs.get(image_name, {})
+
+def get_inliers_per_match(loc):
+    inliers = np.array(loc["PnP_ret"]["inliers"])
+    counts = np.array([np.sum(loc["indices_db"][inliers] == i) for i in range(len(loc["db"]))])
+
+    db_sort = np.argsort(-counts)
+    inliers_count = []
+    for db_idx in db_sort:
+        inliers_db = inliers[loc["indices_db"] == db_idx]
+        inliers_count.append((sum(inliers_db), len(inliers_db)))
+
+    return inliers_count
+
 
 
 # def main():
@@ -309,41 +323,70 @@ def is_image_blurred(image_path, threshold=100):
     return variance < threshold, variance
 
 
+def heuristic(inliers):
+    return inliers[0][0] + inliers[1][0] > 30
+
 def main():
     hloc = HLoc(40)
 
     global_timestamp_trajectory_map = create_timestamp_trajectory_map("./datasets/HGE/sessions/map/trajectories.txt") | create_timestamp_trajectory_map("./datasets/HGE/sessions/query_val_hololens/proc/alignment_trajectories.txt")
     global_xyz = np.array([[trajectory['tx'], trajectory['ty'], trajectory['tz']] for trajectory in global_timestamp_trajectory_map.values()])
 
-    # for img_path in glob.glob("./good_image*.jpg"):
-    # for img_path in glob.glob("datasets/ml2/4f118abe-b566-11ef-9c92-749779ecb898.jpg"):
-    for img_path in glob.glob("datasets/ml2/*.jpg"):
+    session = "./datasets/validation/1734273024548/"
+    local_timestamp_trajectory_map = create_timestamp_trajectory_map(f"{session}/local_trajectories.txt")
+    np.random.seed(1)
+
+    translation = []
+    rejected = []
+    
+    for img_path in np.random.permutation(glob.glob(f"{session}/**/*.jpg")):
+        timestamp = int(Path(img_path).stem)
+        local_transform = create_transform(local_timestamp_trajectory_map[timestamp])
+        print(local_transform)
         image = np.asarray(Image.open(img_path))
 
         results = hloc.localize_image(image)
 
-        visualization.visualize_loc(QUERY_RESULT, DATASET, QUERY_IMAGE_DIR, n=1, top_k_db=3, seed=2)
+        # visualization.visualize_loc(QUERY_RESULT, DATASET, QUERY_IMAGE_DIR, n=1, top_k_db=3, seed=2)
 
         try:
             tvec = results["t"]
+            trajectory_global = {"qx": results["q"][0], "qy": results["q"][2], "qz": results["q"][1], "qw": results["q"][3], "tx": results["t"][0], "ty": results["t"][2], "tz": results["t"][1]}
+            global_transform = create_transform(trajectory_global)
 
-            # plt.figure(figsize=(12, 12))
-            # plt.scatter(tvec[0], tvec[1], c = 'green', zorder=3)
-            # plt.scatter(global_xyz[:,0], global_xyz[:,1], c = 'blue', zorder=1, alpha=0.01)
+            local_to_global = global_transform @ np.linalg.inv(local_transform)
 
-            print(img_path)
-            print("blur:", is_image_blurred(img_path))
-            fig = plt.figure(figsize=(12, 12))
-            ax = fig.add_subplot(projection='3d')
-            ax.scatter([tvec[0]], [tvec[1]], [tvec[2]], c = 'green', zorder=3)
-            ax.scatter(global_xyz[:,0], global_xyz[:,1], global_xyz[:,2], c = 'blue', zorder=1, alpha=0.01)
+            t = local_to_global[:3,3]
+            deg = R.from_matrix(local_to_global[:3,:3]).as_euler("zxy", degrees=True)
 
-            print(tvec)
-            
-            plt.show()
+            print("glob ", global_transform)
+            print("inv loc ", np.linalg.inv(local_transform))
+            print("loc_to_glob ", local_to_global)
+            print(R.from_matrix(local_to_global[:3,:3]).as_quat(scalar_first=False))
+            print(t, deg)
+
+            if heuristic(get_inliers_per_match(results)):
+                translation.append(t[[0,2,1]])
+            else:
+                rejected.append(t[[0,2,1]])
+
+            # fig = plt.figure(figsize=(12, 12))
+            # ax = fig.add_subplot(projection='3d')
+            # ax.scatter([tvec[0]], [tvec[1]], [tvec[2]], c = 'green', zorder=3)
+            # ax.scatter(global_xyz[:,0], global_xyz[:,1], global_xyz[:,2], c = 'blue', zorder=1, alpha=0.01)            
+            # plt.show()
         except:
             print(f"no results for: {img_path}")
 
+    translation = np.array(translation)
+    rejected = np.array(rejected)
+
+    fig = plt.figure(figsize=(12, 12))
+    ax = fig.add_subplot(projection='3d')
+    ax.scatter(translation[:,0], translation[:,1], translation[:,2], c = 'green', zorder=3)
+    ax.scatter(rejected[:,0], rejected[:,1], rejected[:,2], c = 'red', zorder=3)
+    ax.scatter(global_xyz[:,0], global_xyz[:,1], global_xyz[:,2], c = 'blue', zorder=1, alpha=0.01)
+    plt.show()
 
 if __name__ == '__main__':
     main()

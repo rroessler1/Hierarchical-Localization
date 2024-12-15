@@ -305,6 +305,8 @@ def main(dataset_dir, q_dir, retrieval, q_features, features, matches, results, 
             tvec = camera_transform.translation
 
             logs["loc"][q] = {
+                "t": tvec,
+                "q": qvec,
                 "db": db,
                 "PnP_ret": ret,
                 "keypoints_query": mkpq,
@@ -312,11 +314,6 @@ def main(dataset_dir, q_dir, retrieval, q_features, features, matches, results, 
                 "3d_points": mkp3d,
                 "indices_db": indices,
                 "num_matches": num_matches,
-            }
-
-            result_dict[q] = {
-                "t": tvec,
-                "q": qvec,
             }
 
             i += 1
@@ -329,8 +326,8 @@ def main(dataset_dir, q_dir, retrieval, q_features, features, matches, results, 
     with open(results, "w") as f:
         for q in queries:
             if q in result_dict:
-                tvec = result_dict[q]["t"]
-                qvec = result_dict[q]["q"]
+                tvec = logs["loc"][q]["t"]
+                qvec = logs["loc"][q]["q"]
                 qvec = " ".join(map(str, qvec))
                 tvec = " ".join(map(str, tvec))
                 name = q.split("/")[-1]
@@ -344,7 +341,7 @@ def main(dataset_dir, q_dir, retrieval, q_features, features, matches, results, 
         pickle.dump(logs, f)
     logger.info("Done!")
 
-    return result_dict
+    return logs["loc"]
 
 
 if __name__ == "__main__":
