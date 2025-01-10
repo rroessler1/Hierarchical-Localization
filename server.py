@@ -40,42 +40,47 @@ app.most_inliers = 0
 app.avg_translation = 0
 app.avg_translation_n = 0
 
-@app.post("/items/")
-async def create_item(item: Request):
-    print("received Request")
+# @app.post("/items/")
+# async def create_item(item: Request):
+#     print("received Request")
 
-    try:
-        rawPNGData = base64.b64decode(item.imageData)
-        pil_image = Image.open(io.BytesIO(rawPNGData))
+#     try:
+#         rawPNGData = base64.b64decode(item.imageData)
+#         pil_image = Image.open(io.BytesIO(rawPNGData))
 
-        image = np.array(pil_image)
-        results = app.hloc.localize_image(image=image)
+#         image = np.array(pil_image)
+#         results = app.hloc.localize_image(image=image)
 
-        trajectory_global = {"qx": results["q"][0], "qy": results["q"][1], "qz": results["q"][2], "qw": results["q"][3], "tx": results["t"][0], "ty": results["t"][1], "tz": results["t"][2]}
-        trajectory_local = {"qx": item.rot[0], "qy": item.rot[2], "qz": item.rot[1], "qw": item.rot[3], "tx": item.pos[0], "ty": item.pos[2], "tz": item.pos[1]}
+#         trajectory_global = {"qx": results["q"][0], "qy": results["q"][1], "qz": results["q"][2], "qw": results["q"][3], "tx": results["t"][0], "ty": results["t"][1], "tz": results["t"][2]}
+#         trajectory_local = {"qx": item.rot[0], "qy": item.rot[2], "qz": item.rot[1], "qw": item.rot[3], "tx": item.pos[0], "ty": item.pos[2], "tz": item.pos[1]}
 
-        curr_transformation = create_transform(trajectory_global) @ np.linalg.inv(create_transform(trajectory_local))
-        curr_translation = curr_transformation[:, 3]
-        inliers = get_inliers_per_match(results)
-        inlier_sum = np.sum([inlier[0] for inlier in inliers[:3]])
+#         curr_transformation = create_transform(trajectory_global) @ np.linalg.inv(create_transform(trajectory_local))
+#         curr_translation = curr_transformation[:, 3]
+#         inliers = get_inliers_per_match(results)
+#         inlier_sum = np.sum([inlier[0] for inlier in inliers[:3]])
 
-        if heuristic(inliers):
-            app.avg_translation = (app.avg_translation_n * app.avg_translation + curr_translation) / app.avg_translation_n
-            app.avg_translation_n += 1
+#         print(curr_transformation)
+#         print(inlier_sum)
 
-        if np.linalg.norm(curr_translation[:2] - app.avg_translation[:2], 2) < 4 and inlier_sum > app.most_inliers:
-            app.transformation = curr_transformation
-            app.most_inliers = inlier_sum
+#         app.avg_translation = (app.avg_translation_n * app.avg_translation + curr_translation) / app.avg_translation_n
+#         app.avg_translation_n += 1
 
-    except:
-        print("failed localizing")
+#         if np.linalg.norm(curr_translation[:2] - app.avg_translation[:2], 2) < 4:
+#             app.transformation = curr_transformation
+#             app.most_inliers = inlier_sum
+
+#     except:
+#         print("failed localizing")
     
-    transformed_pos = (app.transformation @ np.array(app.pos)[[0,2,1]]) [[0,2,1]]
+#     pos = np.array([*item.pos, 1])[[0,2,1,3]]
+#     transformed_pos = (app.transformation @ pos) [[0,2,1]]
 
-    response = Response(pos=transformed_pos, rot=[0,0,0,1])
+#     response = Response(pos=transformed_pos, rot=[0,0,0,1])
 
-    return response
+#     return response
 
+app.pos = [0,0,0]
+app.rot = [0,0,0,1]
 
 @app.post("/items/")
 async def create_item(item: Request):
